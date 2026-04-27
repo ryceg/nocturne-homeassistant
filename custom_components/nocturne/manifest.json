@@ -1,0 +1,11 @@
+{
+  "domain": "nocturne",
+  "name": "Nocturne",
+  "codeowners": ["@ryceg"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/ryceg/nocturne-homeassistant",
+  "iot_class": "cloud_polling",
+  "requirements": ["nocturne-sdk==0.1.0"],
+  "version": "0.1.0"
+}
