@@ -1,0 +1,47 @@
+name: SDK Bump
+on:
+  repository_dispatch:
+    types: [sdk-published]
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: "nocturne-sdk version to bump to"
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ -n "${{ inputs.sdk_version }}" ]]; then
+            echo "version=${{ inputs.sdk_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.client_payload.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update manifest.json
+        run: |
+          python -c "
+          import json
+          with open('custom_components/nocturne/manifest.json') as f:
+              m = json.load(f)
+          m['requirements'] = [f'nocturne-sdk==${{ steps.version.outputs.version }}']
+          with open('custom_components/nocturne/manifest.json', 'w') as f:
+              json.dump(m, f, indent=2)
+              f.write('\n')
+          "
+
+      - name: Create PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: "chore: bump nocturne-sdk to ${{ steps.version.outputs.version }}"
+          body: "Automated SDK version bump."
+          branch: "sdk-bump/${{ steps.version.outputs.version }}"
+          commit-message: "chore: bump nocturne-sdk to ${{ steps.version.outputs.version }}"
