@@ -6,6 +6,6 @@
   "dependencies": [],
   "documentation": "https://github.com/ryceg/nocturne-homeassistant",
   "iot_class": "cloud_polling",
-  "requirements": ["nocturne-sdk==0.1.0"],
+  "requirements": ["nocturne-py==0.1.0"],
   "version": "0.1.0"
 }

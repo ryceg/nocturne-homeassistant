@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       sdk_version:
-        description: "nocturne-sdk version to bump to"
+        description: "nocturne-py version to bump to"
         required: true
 
 jobs:
@@ -32,7 +32,7 @@ jobs:
           import json
           with open('custom_components/nocturne/manifest.json') as f:
               m = json.load(f)
-          m['requirements'] = [f'nocturne-sdk==${{ steps.version.outputs.version }}']
+          m['requirements'] = [f'nocturne-py==${{ steps.version.outputs.version }}']
           with open('custom_components/nocturne/manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
               f.write('\n')
@@ -41,7 +41,7 @@ jobs:
       - name: Create PR
         uses: peter-evans/create-pull-request@v6
         with:
-          title: "chore: bump nocturne-sdk to ${{ steps.version.outputs.version }}"
+          title: "chore: bump nocturne-py to ${{ steps.version.outputs.version }}"
           body: "Automated SDK version bump."
           branch: "sdk-bump/${{ steps.version.outputs.version }}"
-          commit-message: "chore: bump nocturne-sdk to ${{ steps.version.outputs.version }}"
+          commit-message: "chore: bump nocturne-py to ${{ steps.version.outputs.version }}"
