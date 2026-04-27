@@ -6,27 +6,34 @@ import logging
 from typing import Any
 
 from aiohttp import ClientResponseError, ClientSession
+from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class NocturneApiClient:
-    """Nocturne v4 API client using HA's aiohttp session."""
+    """Nocturne v4 API client using HA's aiohttp session with OAuth2Session."""
 
     def __init__(
-        self, session: ClientSession, base_url: str, access_token: str
+        self,
+        session: ClientSession,
+        base_url: str,
+        oauth_session: OAuth2Session | None = None,
+        access_token: str = "",
     ) -> None:
         self._session = session
         self._base_url = base_url.rstrip("/")
+        self._oauth_session = oauth_session
         self._token = access_token
 
     @property
-    def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"}
-
-    def update_token(self, access_token: str) -> None:
-        """Update the OAuth access token after refresh."""
-        self._token = access_token
+    async def _headers(self) -> dict[str, str]:
+        if self._oauth_session is not None:
+            await self._oauth_session.async_ensure_token_valid()
+            token = self._oauth_session.token["access_token"]
+        else:
+            token = self._token
+        return {"Authorization": f"Bearer {token}"}
 
     async def validate_connection(self) -> bool:
         """Validate the instance URL by hitting the OAuth discovery endpoint."""
@@ -77,9 +84,10 @@ class NocturneApiClient:
         self, path: str, params: dict[str, str] | None = None
     ) -> Any | None:
         try:
+            headers = await self._headers
             resp = await self._session.get(
                 f"{self._base_url}{path}",
-                headers=self._headers,
+                headers=headers,
                 params=params,
             )
             resp.raise_for_status()
@@ -92,13 +100,16 @@ class NocturneApiClient:
 
     async def _post(self, path: str, data: dict[str, Any]) -> bool:
         try:
+            headers = await self._headers
             resp = await self._session.post(
                 f"{self._base_url}{path}",
-                headers=self._headers,
+                headers=headers,
                 json=data,
             )
             resp.raise_for_status()
             return True
+        except ClientResponseError:
+            raise
         except Exception:
             _LOGGER.exception("Unexpected error posting to %s", path)
             return False

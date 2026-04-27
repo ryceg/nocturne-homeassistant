@@ -1,0 +1,85 @@
+log_carbs:
+  name: Log Carbs
+  description: Log a carbohydrate intake to Nocturne.
+  fields:
+    carbs:
+      name: Carbs
+      description: Amount of carbohydrates in grams.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 500
+          unit_of_measurement: g
+    notes:
+      name: Notes
+      description: Optional notes.
+      selector:
+        text:
+
+log_insulin:
+  name: Log Insulin
+  description: Log an insulin dose to Nocturne.
+  fields:
+    insulin:
+      name: Insulin
+      description: Amount of insulin in units.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          step: 0.05
+          unit_of_measurement: U
+    notes:
+      name: Notes
+      description: Optional notes.
+      selector:
+        text:
+
+log_glucose:
+  name: Log Glucose
+  description: Log a glucose reading to Nocturne.
+  fields:
+    value:
+      name: Value
+      description: Glucose value in mg/dL.
+      required: true
+      selector:
+        number:
+          min: 20
+          max: 600
+          unit_of_measurement: mg/dL
+    type:
+      name: Type
+      description: Type of glucose reading.
+      default: sgv
+      selector:
+        select:
+          options:
+            - sgv
+            - mbg
+
+log_activity:
+  name: Log Activity
+  description: Log physical activity to Nocturne.
+  fields:
+    duration:
+      name: Duration
+      description: Duration in minutes.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+    activity_type:
+      name: Activity Type
+      description: Type of activity.
+      selector:
+        text:
+    notes:
+      name: Notes
+      description: Optional notes.
+      selector:
+        text:

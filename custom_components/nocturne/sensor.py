@@ -33,15 +33,22 @@ class NocturneSensorDescription(SensorEntityDescription):
     value_fn: Callable[[dict[str, Any]], Any]
     available_fn: Callable[[dict[str, Any]], bool]
     coordinator_key: str  # "glucose" or "device"
+    enum_options: list[str] | None = None
 
 
-def _safe_get(data: dict[str, Any], *keys: str) -> Any:
-    """Safely traverse nested dicts."""
+def _safe_get(data: dict[str, Any], *keys: str | int) -> Any:
+    """Safely traverse nested dicts and lists."""
     current = data
     for key in keys:
-        if not isinstance(current, dict):
+        if isinstance(current, dict) and isinstance(key, str):
+            current = current.get(key)
+        elif isinstance(current, (list, tuple)) and isinstance(key, int):
+            try:
+                current = current[key]
+            except IndexError:
+                return None
+        else:
             return None
-        current = current.get(key)
     return current
 
 
@@ -65,6 +72,11 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         coordinator_key="glucose",
         value_fn=lambda d: _safe_get(d, "entry", "direction"),
         available_fn=lambda d: _safe_get(d, "entry") is not None,
+        enum_options=[
+            "None", "DoubleUp", "SingleUp", "FortyFiveUp", "Flat",
+            "FortyFiveDown", "SingleDown", "DoubleDown",
+            "NOT COMPUTABLE", "RATE OUT OF RANGE",
+        ],
     ),
     NocturneSensorDescription(
         key="iob",
@@ -111,6 +123,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         device_class=SensorDeviceClass.ENUM,
         icon="mdi:sync",
         coordinator_key="glucose",
+        enum_options=["enacted", "open", "unknown"],
         value_fn=lambda d: (
             "enacted"
             if _safe_get(d, "device_status", "openaps", "enacted")
@@ -239,6 +252,8 @@ class NocturneSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self.entity_description = description
         self._attr_unique_id = f"{entry_id}_{description.key}"
+        if description.enum_options is not None:
+            self._attr_options = description.enum_options
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry_id)},
             "name": "Nocturne",

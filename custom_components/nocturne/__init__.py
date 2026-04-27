@@ -9,6 +9,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.config_entry_oauth2_flow import (
+    OAuth2Session,
+    async_get_config_entry_implementation,
+)
 
 from .api import NocturneApiClient
 from .const import CONF_INSTANCE_URL, DATA_SOURCE_HOME_ASSISTANT, DOMAIN
@@ -53,10 +57,12 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
 async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Set up Nocturne from a config entry."""
     session = async_get_clientsession(hass)
-    token = entry.data["token"]["access_token"]
     base_url = entry.data[CONF_INSTANCE_URL]
 
-    client = NocturneApiClient(session, base_url, token)
+    implementation = await async_get_config_entry_implementation(hass, entry)
+    oauth_session = OAuth2Session(hass, entry, implementation)
+
+    client = NocturneApiClient(session, base_url, oauth_session=oauth_session)
 
     glucose_coordinator = GlucoseCoordinator(hass, client)
     device_coordinator = DeviceCoordinator(hass, client)
@@ -81,6 +87,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) ->
     """Unload a config entry."""
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+        if not hass.data[DOMAIN]:
+            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity"):
+                hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
 
@@ -133,6 +142,7 @@ def _register_services(hass: HomeAssistant) -> None:
             {
                 "eventType": "Exercise",
                 "duration": call.data["duration"],
+                "activity_type": call.data.get("activity_type", ""),
                 "notes": call.data.get("notes", ""),
                 "dataSource": DATA_SOURCE_HOME_ASSISTANT,
             }
