@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Nocturne",
+        "description": "Enter the URL of your Nocturne instance.",
+        "data": {
+          "instance_url": "Instance URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to that Nocturne instance. Check the URL and try again."
+    },
+    "abort": {
+      "already_configured": "This Nocturne instance is already configured."
+    }
+  }
+}
