@@ -8,11 +8,11 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
 )
+from nocturne_sdk import Treatment
 
 from .api import NocturneApiClient
 from .const import CONF_INSTANCE_URL, DATA_SOURCE_HOME_ASSISTANT, DOMAIN
@@ -56,13 +56,12 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
 
 async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Set up Nocturne from a config entry."""
-    session = async_get_clientsession(hass)
     base_url = entry.data[CONF_INSTANCE_URL]
 
     implementation = await async_get_config_entry_implementation(hass, entry)
     oauth_session = OAuth2Session(hass, entry, implementation)
 
-    client = NocturneApiClient(session, base_url, oauth_session=oauth_session)
+    client = NocturneApiClient(base_url, oauth_session=oauth_session)
 
     glucose_coordinator = GlucoseCoordinator(hass, client)
     device_coordinator = DeviceCoordinator(hass, client)
@@ -106,46 +105,42 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_log_carbs(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.post_treatment(
-            {
-                "eventType": "Carb Correction",
-                "carbs": call.data["carbs"],
-                "notes": call.data.get("notes", ""),
-                "dataSource": DATA_SOURCE_HOME_ASSISTANT,
-            }
+        await client.create_treatment(
+            Treatment(
+                eventType="Carb Correction",
+                carbs=call.data["carbs"],
+                notes=call.data.get("notes", ""),
+                data_source=DATA_SOURCE_HOME_ASSISTANT,
+            )
         )
 
     async def handle_log_insulin(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.post_treatment(
-            {
-                "eventType": "Correction Bolus",
-                "insulin": call.data["insulin"],
-                "notes": call.data.get("notes", ""),
-                "dataSource": DATA_SOURCE_HOME_ASSISTANT,
-            }
+        await client.create_treatment(
+            Treatment(
+                eventType="Correction Bolus",
+                insulin=call.data["insulin"],
+                notes=call.data.get("notes", ""),
+                data_source=DATA_SOURCE_HOME_ASSISTANT,
+            )
         )
 
     async def handle_log_glucose(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.post_entry(
-            {
-                "sgv": call.data["value"],
-                "type": call.data.get("type", "sgv"),
-                "dataSource": DATA_SOURCE_HOME_ASSISTANT,
-            }
+        await client.create_glucose(
+            mgdl=call.data["value"],
+            data_source=DATA_SOURCE_HOME_ASSISTANT,
         )
 
     async def handle_log_activity(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.post_treatment(
-            {
-                "eventType": "Exercise",
-                "duration": call.data["duration"],
-                "activity_type": call.data.get("activity_type", ""),
-                "notes": call.data.get("notes", ""),
-                "dataSource": DATA_SOURCE_HOME_ASSISTANT,
-            }
+        await client.create_treatment(
+            Treatment(
+                eventType="Exercise",
+                duration=call.data["duration"],
+                notes=call.data.get("notes", ""),
+                data_source=DATA_SOURCE_HOME_ASSISTANT,
+            )
         )
 
     hass.services.async_register(

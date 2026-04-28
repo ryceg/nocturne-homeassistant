@@ -38,22 +38,6 @@ class NocturneSensorDescription(SensorEntityDescription):
     enum_options: list[str] | None = None
 
 
-def _safe_get(data: dict[str, Any], *keys: str | int) -> Any:
-    """Safely traverse nested dicts and lists."""
-    current = data
-    for key in keys:
-        if isinstance(current, dict) and isinstance(key, str):
-            current = current.get(key)
-        elif isinstance(current, (list, tuple)) and isinstance(key, int):
-            try:
-                current = current[key]
-            except IndexError:
-                return None
-        else:
-            return None
-    return current
-
-
 GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="current_glucose",
@@ -63,8 +47,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:diabetes",
         coordinator_key="glucose",
-        value_fn=lambda d: _safe_get(d, "entry", "sgv"),
-        available_fn=lambda d: _safe_get(d, "entry") is not None,
+        value_fn=lambda d: d["glucose"].mgdl if d.get("glucose") else None,
+        available_fn=lambda d: d.get("glucose") is not None,
     ),
     NocturneSensorDescription(
         key="glucose_trend",
@@ -72,8 +56,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         device_class=SensorDeviceClass.ENUM,
         icon="mdi:trending-up",
         coordinator_key="glucose",
-        value_fn=lambda d: _safe_get(d, "entry", "direction"),
-        available_fn=lambda d: _safe_get(d, "entry") is not None,
+        value_fn=lambda d: d["glucose"].direction.value if d.get("glucose") and d["glucose"].direction else None,
+        available_fn=lambda d: d.get("glucose") is not None and d["glucose"].direction is not None,
         enum_options=[
             "None", "DoubleUp", "SingleUp", "FortyFiveUp", "Flat",
             "FortyFiveDown", "SingleDown", "DoubleDown",
@@ -87,8 +71,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:needle",
         coordinator_key="glucose",
-        value_fn=lambda d: _safe_get(d, "device_status", "openaps", "iob", "iob"),
-        available_fn=lambda d: _safe_get(d, "device_status", "openaps", "iob") is not None,
+        value_fn=lambda d: d["aps"].iob if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].iob is not None,
     ),
     NocturneSensorDescription(
         key="cob",
@@ -97,8 +81,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:food-apple",
         coordinator_key="glucose",
-        value_fn=lambda d: _safe_get(d, "device_status", "openaps", "enacted", "COB"),
-        available_fn=lambda d: _safe_get(d, "device_status", "openaps", "enacted") is not None,
+        value_fn=lambda d: d["aps"].cob if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].cob is not None,
     ),
     NocturneSensorDescription(
         key="predicted_bg",
@@ -108,16 +92,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:crystal-ball",
         coordinator_key="glucose",
-        value_fn=lambda d: (
-            _safe_get(d, "device_status", "openaps", "enacted", "predBGs", "IOB", -1)
-            if isinstance(
-                _safe_get(d, "device_status", "openaps", "enacted", "predBGs", "IOB"), list
-            )
-            else None
-        ),
-        available_fn=lambda d: isinstance(
-            _safe_get(d, "device_status", "openaps", "enacted", "predBGs", "IOB"), list
-        ),
+        value_fn=lambda d: d["aps"].eventualBg if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].eventualBg is not None,
     ),
     NocturneSensorDescription(
         key="loop_status",
@@ -127,11 +103,10 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         coordinator_key="glucose",
         enum_options=["enacted", "open", "unknown"],
         value_fn=lambda d: (
-            "enacted"
-            if _safe_get(d, "device_status", "openaps", "enacted")
-            else ("open" if _safe_get(d, "device_status", "openaps") else "unknown")
+            "enacted" if d.get("aps") and d["aps"].enacted
+            else ("open" if d.get("aps") else "unknown")
         ),
-        available_fn=lambda d: _safe_get(d, "device_status", "openaps") is not None,
+        available_fn=lambda d: d.get("aps") is not None,
     ),
     NocturneSensorDescription(
         key="active_basal_rate",
@@ -140,11 +115,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:iv-bag",
         coordinator_key="glucose",
-        value_fn=lambda d: _safe_get(d, "device_status", "openaps", "enacted", "rate"),
-        available_fn=lambda d: _safe_get(
-            d, "device_status", "openaps", "enacted", "rate"
-        )
-        is not None,
+        value_fn=lambda d: d["aps"].enactedRate if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].enactedRate is not None,
     ),
 ]
 
@@ -156,8 +128,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:beaker",
         coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "device_status", "pump", "reservoir"),
-        available_fn=lambda d: _safe_get(d, "device_status", "pump", "reservoir") is not None,
+        value_fn=lambda d: d["pump"].reservoir if d.get("pump") else None,
+        available_fn=lambda d: d.get("pump") is not None and d["pump"].reservoir is not None,
     ),
     NocturneSensorDescription(
         key="pump_battery",
@@ -167,8 +139,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery",
         coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "device_status", "pump", "battery", "percent"),
-        available_fn=lambda d: _safe_get(d, "device_status", "pump", "battery") is not None,
+        value_fn=lambda d: d["pump"].batteryPercent if d.get("pump") else None,
+        available_fn=lambda d: d.get("pump") is not None and d["pump"].batteryPercent is not None,
     ),
     NocturneSensorDescription(
         key="cgm_battery",
@@ -178,19 +150,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery",
         coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "device_status", "uploader", "battery"),
-        available_fn=lambda d: _safe_get(d, "device_status", "uploader", "battery") is not None,
-    ),
-    NocturneSensorDescription(
-        key="cgm_signal",
-        name="CGM Signal",
-        device_class=SensorDeviceClass.SIGNAL_STRENGTH,
-        native_unit_of_measurement="dB",
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:signal",
-        coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "device_status", "uploader", "signal"),
-        available_fn=lambda d: _safe_get(d, "device_status", "uploader", "signal") is not None,
+        value_fn=lambda d: d["uploader"].battery if d.get("uploader") else None,
+        available_fn=lambda d: d.get("uploader") is not None and d["uploader"].battery is not None,
     ),
     NocturneSensorDescription(
         key="sensor_age",
@@ -200,16 +161,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:timer-sand",
         coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "device_status", "uploader", "sensorAge"),
-        available_fn=lambda d: _safe_get(d, "device_status", "uploader", "sensorAge") is not None,
-    ),
-    NocturneSensorDescription(
-        key="active_profile",
-        name="Active Profile",
-        icon="mdi:account-cog",
-        coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "profile", "name"),
-        available_fn=lambda d: _safe_get(d, "profile") is not None,
+        value_fn=lambda d: d["sensor_age"].days if d.get("sensor_age") else None,
+        available_fn=lambda d: d.get("sensor_age") is not None and d["sensor_age"].days is not None,
     ),
     NocturneSensorDescription(
         key="time_in_range",
@@ -218,8 +171,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:target",
         coordinator_key="device",
-        value_fn=lambda d: _safe_get(d, "report", "timeInRange"),
-        available_fn=lambda d: _safe_get(d, "report", "timeInRange") is not None,
+        value_fn=lambda d: d["daily_summary"].timeInRangePercent if d.get("daily_summary") else None,
+        available_fn=lambda d: d.get("daily_summary") is not None and d["daily_summary"].timeInRangePercent is not None,
     ),
 ]
 

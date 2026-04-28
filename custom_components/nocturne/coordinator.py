@@ -6,13 +6,13 @@ import logging
 from datetime import timedelta
 from typing import Any
 
-from aiohttp import ClientResponseError
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from nocturne_sdk import ApiException
 
 from .api import NocturneApiClient
 from .const import DEVICE_UPDATE_INTERVAL_SECONDS, GLUCOSE_UPDATE_INTERVAL_SECONDS
@@ -35,14 +35,14 @@ class GlucoseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            entry = await self.client.get_latest_entry()
-            device_status = await self.client.get_latest_device_status()
+            glucose = await self.client.get_latest_glucose()
+            aps = await self.client.get_latest_aps_snapshot()
             self._refresh_failed = False
             return {
-                "entry": entry,
-                "device_status": device_status,
+                "glucose": glucose,
+                "aps": aps,
             }
-        except ClientResponseError as err:
+        except ApiException as err:
             if err.status == 401:
                 if self._refresh_failed:
                     raise ConfigEntryAuthFailed(
@@ -70,16 +70,20 @@ class DeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
-            device_status = await self.client.get_latest_device_status()
-            profile = await self.client.get_active_profile()
-            report = await self.client.get_report_summary()
+            pump = await self.client.get_latest_pump_snapshot()
+            uploader = await self.client.get_latest_uploader_snapshot()
+            profile = await self.client.get_profile_summary()
+            daily_summary = await self.client.get_daily_summary()
+            sensor_age = await self.client.get_sensor_age()
             self._refresh_failed = False
             return {
-                "device_status": device_status,
+                "pump": pump,
+                "uploader": uploader,
                 "profile": profile,
-                "report": report,
+                "daily_summary": daily_summary,
+                "sensor_age": sensor_age,
             }
-        except ClientResponseError as err:
+        except ApiException as err:
             if err.status == 401:
                 if self._refresh_failed:
                     raise ConfigEntryAuthFailed(

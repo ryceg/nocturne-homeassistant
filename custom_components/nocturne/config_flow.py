@@ -33,7 +33,8 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
         authorize_url: str,
         token_url: str,
     ) -> None:
-        super().__init__(hass, domain)
+        self.hass = hass
+        self._domain = domain
         self._instance_url = instance_url
         self._authorize_url = authorize_url
         self._token_url = token_url
@@ -41,6 +42,10 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
     @property
     def name(self) -> str:
         return "Nocturne"
+
+    @property
+    def domain(self) -> str:
+        return self._domain
 
     @property
     def extra_authorize_data(self) -> dict:
@@ -53,6 +58,19 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
     async def async_resolve_external_data(self, external_data: Any) -> dict:
         """Resolve external data to tokens."""
         return external_data
+
+    async def _async_refresh_token(self, token: dict) -> dict:
+        """Refresh a token."""
+        session = async_get_clientsession(self.hass)
+        resp = await session.post(
+            self._token_url,
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": token["refresh_token"],
+            },
+        )
+        resp.raise_for_status()
+        return await resp.json()
 
 
 class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
@@ -82,7 +100,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         if user_input is not None:
             url = user_input[CONF_INSTANCE_URL].rstrip("/")
             session = async_get_clientsession(self.hass)
-            client = NocturneApiClient(session, url, "")
+            client = NocturneApiClient(url)
 
             if await client.validate_connection():
                 self._instance_url = url
@@ -91,14 +109,34 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     await self.async_set_unique_id(url)
                     self._abort_if_unique_id_configured()
 
+                    def _rebase_url(endpoint_url: str) -> str:
+                        """Rewrite discovery URL to use the tenant instance origin."""
+                        from urllib.parse import urlparse, urlunparse
+
+                        ep = urlparse(endpoint_url)
+                        inst = urlparse(url)
+                        return urlunparse(ep._replace(
+                            scheme=inst.scheme, netloc=inst.netloc
+                        ))
+
+                    authorize_url = _rebase_url(
+                        self._discovery.get("authorization_endpoint")
+                        or self._discovery["authorizationEndpoint"]
+                    )
+                    token_url = _rebase_url(
+                        self._discovery.get("token_endpoint")
+                        or self._discovery["tokenEndpoint"]
+                    )
+
                     impl = NocturneOAuth2Implementation(
                         self.hass,
                         DOMAIN,
                         url,
-                        self._discovery["authorization_endpoint"],
-                        self._discovery["token_endpoint"],
+                        authorize_url,
+                        token_url,
                     )
                     async_register_implementation(self.hass, DOMAIN, impl)
+                    self.flow_impl = impl
 
                     return await self.async_step_auth()
                 errors["base"] = "cannot_connect"
