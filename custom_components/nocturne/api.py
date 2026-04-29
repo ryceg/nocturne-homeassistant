@@ -86,7 +86,7 @@ class NocturneApiClient:
         def _call() -> SensorGlucose | None:
             with self._client() as client:
                 api = SensorGlucoseApi(client)
-                resp = api.sensor_glucose_get_all(limit=1, sort="desc")
+                resp = api.sensor_glucose_get_all(limit=1, sort="timestamp_desc")
                 if resp.data:
                     return resp.data[0]
                 return None
@@ -100,7 +100,7 @@ class NocturneApiClient:
         def _call() -> ApsSnapshot | None:
             with self._client() as client:
                 api = ApsSnapshotApi(client)
-                resp = api.aps_snapshot_get_all(limit=1, sort="desc")
+                resp = api.aps_snapshot_get_all(limit=1, sort="timestamp_desc")
                 if resp.data:
                     return resp.data[0]
                 return None
@@ -114,7 +114,7 @@ class NocturneApiClient:
         def _call() -> PumpSnapshot | None:
             with self._client() as client:
                 api = PumpSnapshotApi(client)
-                resp = api.pump_snapshot_get_all(limit=1, sort="desc")
+                resp = api.pump_snapshot_get_all(limit=1, sort="timestamp_desc")
                 if resp.data:
                     return resp.data[0]
                 return None
@@ -128,7 +128,7 @@ class NocturneApiClient:
         def _call() -> UploaderSnapshot | None:
             with self._client() as client:
                 api = UploaderSnapshotApi(client)
-                resp = api.uploader_snapshot_get_all(limit=1, sort="desc")
+                resp = api.uploader_snapshot_get_all(limit=1, sort="timestamp_desc")
                 if resp.data:
                     return resp.data[0]
                 return None
