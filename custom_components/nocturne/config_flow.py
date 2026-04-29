@@ -191,12 +191,17 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     )
 
                     # Dynamic Client Registration (RFC 7591)
-                    registration_endpoint = _rebase_url(
+                    raw_registration = (
                         self._discovery.get("registration_endpoint")
-                        or self._discovery.get("registrationEndpoint", "")
+                        or self._discovery.get("registrationEndpoint")
+                    )
+                    registration_endpoint = (
+                        _rebase_url(raw_registration)
+                        if raw_registration
+                        else f"{url}/api/oauth/register"
                     )
                     dcr_response = await self._register_client(
-                        session, registration_endpoint or f"{url}/api/oauth/register"
+                        session, registration_endpoint
                     )
                     if dcr_response is None:
                         errors["base"] = "cannot_connect"
