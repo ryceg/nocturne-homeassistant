@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from nocturne_sdk import ApsSnapshot, SensorGlucose, GlucoseDirection
+from nocturne_py import ApsSnapshot, SensorGlucose, GlucoseDirection
 
 from custom_components.nocturne.sensor import (
     DEVICE_SENSORS,

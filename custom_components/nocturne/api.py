@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
-from nocturne_sdk import (
+from nocturne_py import (
     ApiClient,
     ApsSnapshot,
     Configuration,
@@ -29,7 +29,7 @@ from nocturne_sdk import (
     V4TreatmentsApi,
     V4UploaderSnapshotsApi,
 )
-from nocturne_sdk.models import DailySummaryDay, ProfileSummary
+from nocturne_py.models import DailySummaryDay, ProfileSummary
 
 _LOGGER = logging.getLogger(__name__)
 

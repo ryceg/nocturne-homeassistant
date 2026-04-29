@@ -1,11 +1,11 @@
-"""Tests for NocturneApiClient (SDK-based, mocking nocturne_sdk API classes)."""
+"""Tests for NocturneApiClient (SDK-based, mocking nocturne_py API classes)."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from nocturne_sdk import (
+from nocturne_py import (
     ApiException,
     ApsSnapshot,
     PumpSnapshot,
@@ -13,7 +13,7 @@ from nocturne_sdk import (
     Treatment,
     UploaderSnapshot,
 )
-from nocturne_sdk.models import DailySummaryDay, DailySummaryResponse, ProfileSummary
+from nocturne_py.models import DailySummaryDay, DailySummaryResponse, ProfileSummary
 
 from custom_components.nocturne.api import NocturneApiClient
 

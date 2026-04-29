@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from nocturne_sdk import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
-from nocturne_sdk.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
+from nocturne_py import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
+from nocturne_py.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
 
 from custom_components.nocturne.coordinator import (
     DeviceCoordinator,

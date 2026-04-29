@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from nocturne_sdk import (
+from nocturne_py import (
     ApsSnapshot,
     DeviceAgeInfo,
     GlucoseDirection,
@@ -13,7 +13,7 @@ from nocturne_sdk import (
     SensorGlucose,
     UploaderSnapshot,
 )
-from nocturne_sdk.models import DailySummaryDay, ProfileSummary
+from nocturne_py.models import DailySummaryDay, ProfileSummary
 
 from custom_components.nocturne.const import DOMAIN
 

@@ -12,7 +12,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
 )
-from nocturne_sdk import Treatment
+from nocturne_py import Treatment
 
 from .api import NocturneApiClient
 from .const import CONF_INSTANCE_URL, DATA_SOURCE_HOME_ASSISTANT, DOMAIN

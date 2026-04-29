@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from nocturne_sdk import Treatment
+from nocturne_py import Treatment
 
 from custom_components.nocturne import (
     _get_client,
