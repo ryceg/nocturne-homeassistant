@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
+    async_register_implementation,
 )
 from nocturne_py import (
     CreateBolusRequest,
@@ -22,7 +23,15 @@ from nocturne_py import (
 from datetime import datetime, timezone
 
 from .api import NocturneApiClient
-from .const import CONF_INSTANCE_URL, DATA_SOURCE_HOME_ASSISTANT, DOMAIN
+from .config_flow import NocturneOAuth2Implementation
+from .const import (
+    CONF_AUTHORIZE_URL,
+    CONF_CLIENT_ID,
+    CONF_INSTANCE_URL,
+    CONF_TOKEN_URL,
+    DATA_SOURCE_HOME_ASSISTANT,
+    DOMAIN,
+)
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -64,6 +73,21 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
 async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Set up Nocturne from a config entry."""
     base_url = entry.data[CONF_INSTANCE_URL]
+
+    # Re-register the OAuth implementation so it survives restarts.
+    if CONF_CLIENT_ID in entry.data:
+        async_register_implementation(
+            hass,
+            DOMAIN,
+            NocturneOAuth2Implementation(
+                hass,
+                DOMAIN,
+                base_url,
+                entry.data[CONF_AUTHORIZE_URL],
+                entry.data[CONF_TOKEN_URL],
+                entry.data[CONF_CLIENT_ID],
+            ),
+        )
 
     implementation = await async_get_config_entry_implementation(hass, entry)
     oauth_session = OAuth2Session(hass, entry, implementation)

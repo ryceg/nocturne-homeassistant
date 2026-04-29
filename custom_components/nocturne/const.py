@@ -3,6 +3,11 @@
 DOMAIN = "nocturne"
 
 CONF_INSTANCE_URL = "instance_url"
+CONF_CLIENT_ID = "client_id"
+CONF_AUTHORIZE_URL = "authorize_url"
+CONF_TOKEN_URL = "token_url"
+
+SOFTWARE_ID = "io.home-assistant.nocturne"
 
 GLUCOSE_UPDATE_INTERVAL_SECONDS = 60
 DEVICE_UPDATE_INTERVAL_SECONDS = 300
