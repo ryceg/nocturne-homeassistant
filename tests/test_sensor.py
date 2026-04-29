@@ -1,49 +1,18 @@
-"""Tests for sensor platform: _safe_get, determine_available_sensors, NocturneSensor."""
+"""Tests for sensor platform: determine_available_sensors, NocturneSensor."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
 import pytest
+from nocturne_sdk import ApsSnapshot, SensorGlucose, GlucoseDirection
 
 from custom_components.nocturne.sensor import (
     DEVICE_SENSORS,
     GLUCOSE_SENSORS,
     NocturneSensor,
-    _safe_get,
     determine_available_sensors,
 )
-
-
-class TestSafeGet:
-    def test_single_key(self):
-        assert _safe_get({"a": 1}, "a") == 1
-
-    def test_nested_keys(self):
-        assert _safe_get({"a": {"b": {"c": 42}}}, "a", "b", "c") == 42
-
-    def test_missing_key_returns_none(self):
-        assert _safe_get({"a": 1}, "b") is None
-
-    def test_missing_intermediate_returns_none(self):
-        assert _safe_get({"a": 1}, "a", "b") is None
-
-    def test_non_dict_intermediate_returns_none(self):
-        assert _safe_get({"a": "string"}, "a", "b") is None
-
-    def test_empty_dict(self):
-        assert _safe_get({}, "a") is None
-
-    def test_integer_key_on_list(self):
-        # _safe_get now supports list indexing with int keys
-        assert _safe_get({"a": [10, 20, 30]}, "a", 0) == 10
-        assert _safe_get({"a": [10, 20, 30]}, "a", -1) == 30
-
-    def test_list_index_out_of_range(self):
-        assert _safe_get({"a": [1]}, "a", 5) is None
-
-    def test_string_key_on_list_returns_none(self):
-        assert _safe_get({"a": [1, 2, 3]}, "a", "b") is None
 
 
 class TestDetermineAvailableSensors:
@@ -60,7 +29,6 @@ class TestDetermineAvailableSensors:
         device_keys = {s.key for s in available}
         assert "pump_reservoir" in device_keys
         assert "pump_battery" in device_keys
-        assert "active_profile" in device_keys
         assert "time_in_range" in device_keys
 
     def test_none_glucose_data(self, device_data):
@@ -80,8 +48,11 @@ class TestDetermineAvailableSensors:
         assert determine_available_sensors(None, None) == []
 
     def test_partial_glucose_data(self):
-        # Only entry, no device_status — should get glucose/trend but not iob/cob
-        partial = {"entry": {"sgv": 100, "direction": "Flat"}}
+        # Only glucose, no APS — should get glucose/trend but not iob/cob
+        partial = {
+            "glucose": SensorGlucose(mgdl=100, direction=GlucoseDirection("Flat")),
+            "aps": None,
+        }
         available = determine_available_sensors(partial, None)
         keys = {s.key for s in available}
         assert "current_glucose" in keys

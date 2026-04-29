@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from nocturne_sdk import Treatment
 
 from custom_components.nocturne import (
     _get_client,
@@ -62,11 +63,12 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        mock_api_client.post_treatment.assert_awaited_once()
-        treatment = mock_api_client.post_treatment.call_args[0][0]
-        assert treatment["eventType"] == "Carb Correction"
-        assert treatment["carbs"] == 30.0
-        assert treatment["dataSource"] == DATA_SOURCE_HOME_ASSISTANT
+        mock_api_client.create_treatment.assert_awaited_once()
+        treatment = mock_api_client.create_treatment.call_args[0][0]
+        assert isinstance(treatment, Treatment)
+        assert treatment.event_type == "Carb Correction"
+        assert treatment.carbs == 30.0
+        assert treatment.data_source == DATA_SOURCE_HOME_ASSISTANT
 
     async def test_log_insulin(self, hass_with_services, mock_api_client):
         handler = hass_with_services["log_insulin"]
@@ -75,9 +77,10 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        treatment = mock_api_client.post_treatment.call_args[0][0]
-        assert treatment["eventType"] == "Correction Bolus"
-        assert treatment["insulin"] == 5.0
+        treatment = mock_api_client.create_treatment.call_args[0][0]
+        assert isinstance(treatment, Treatment)
+        assert treatment.event_type == "Correction Bolus"
+        assert treatment.insulin == 5.0
 
     async def test_log_glucose(self, hass_with_services, mock_api_client):
         handler = hass_with_services["log_glucose"]
@@ -86,10 +89,10 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        mock_api_client.post_entry.assert_awaited_once()
-        entry = mock_api_client.post_entry.call_args[0][0]
-        assert entry["sgv"] == 110.0
-        assert entry["type"] == "sgv"
+        mock_api_client.create_glucose.assert_awaited_once_with(
+            mgdl=110.0,
+            data_source=DATA_SOURCE_HOME_ASSISTANT,
+        )
 
     async def test_log_activity(self, hass_with_services, mock_api_client):
         handler = hass_with_services["log_activity"]
@@ -98,7 +101,7 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        treatment = mock_api_client.post_treatment.call_args[0][0]
-        assert treatment["eventType"] == "Exercise"
-        assert treatment["duration"] == 30
-        assert treatment["activity_type"] == "walking"
+        treatment = mock_api_client.create_treatment.call_args[0][0]
+        assert isinstance(treatment, Treatment)
+        assert treatment.event_type == "Exercise"
+        assert treatment.duration == 30

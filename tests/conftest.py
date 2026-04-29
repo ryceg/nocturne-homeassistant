@@ -5,38 +5,47 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from nocturne_sdk import (
+    ApsSnapshot,
+    DeviceAgeInfo,
+    GlucoseDirection,
+    PumpSnapshot,
+    SensorGlucose,
+    UploaderSnapshot,
+)
+from nocturne_sdk.models import DailySummaryDay, ProfileSummary
 
 from custom_components.nocturne.const import DOMAIN
 
 
 @pytest.fixture
 def glucose_data() -> dict:
-    """Realistic glucose coordinator data."""
+    """Realistic glucose coordinator data using SDK models."""
     return {
-        "entry": {"sgv": 120, "direction": "Flat", "date": 1700000000000},
-        "device_status": {
-            "openaps": {
-                "iob": {"iob": 1.5, "activity": 0.02},
-                "enacted": {
-                    "COB": 20,
-                    "rate": 0.8,
-                    "predBGs": {"IOB": [120, 115, 110]},
-                },
-            }
-        },
+        "glucose": SensorGlucose(
+            mgdl=120,
+            direction=GlucoseDirection("Flat"),
+            mills=1700000000000,
+        ),
+        "aps": ApsSnapshot(
+            iob=1.5,
+            cob=20,
+            enacted_rate=0.8,
+            eventual_bg=110,
+            enacted=True,
+        ),
     }
 
 
 @pytest.fixture
 def device_data() -> dict:
-    """Realistic device coordinator data."""
+    """Realistic device coordinator data using SDK models."""
     return {
-        "device_status": {
-            "pump": {"reservoir": 150.0, "battery": {"percent": 80}},
-            "uploader": {"battery": 90, "signal": -70, "sensorAge": 5},
-        },
-        "profile": {"name": "Default"},
-        "report": {"timeInRange": 72.5},
+        "pump": PumpSnapshot(reservoir=150.0, battery_percent=80),
+        "uploader": UploaderSnapshot(battery=90),
+        "profile": ProfileSummary(),
+        "daily_summary": DailySummaryDay(time_in_range_percent=72.5),
+        "sensor_age": DeviceAgeInfo(days=5),
     }
 
 
@@ -45,16 +54,19 @@ def mock_api_client() -> AsyncMock:
     """AsyncMock of NocturneApiClient with sensible defaults."""
     client = AsyncMock()
     client.validate_connection.return_value = True
-    client.get_latest_entry.return_value = {"sgv": 120, "direction": "Flat"}
-    client.get_latest_device_status.return_value = {
-        "openaps": {"iob": {"iob": 1.5}},
-        "pump": {"reservoir": 150.0, "battery": {"percent": 80}},
-        "uploader": {"battery": 90},
-    }
-    client.get_active_profile.return_value = {"name": "Default"}
-    client.get_report_summary.return_value = {"timeInRange": 72.5}
-    client.post_entry.return_value = True
-    client.post_treatment.return_value = True
+    client.get_latest_glucose.return_value = SensorGlucose(
+        mgdl=120, direction=GlucoseDirection("Flat")
+    )
+    client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=1.5)
+    client.get_latest_pump_snapshot.return_value = PumpSnapshot(
+        reservoir=150.0, battery_percent=80
+    )
+    client.get_latest_uploader_snapshot.return_value = UploaderSnapshot(battery=90)
+    client.get_profile_summary.return_value = ProfileSummary()
+    client.get_daily_summary.return_value = DailySummaryDay(time_in_range_percent=72.5)
+    client.get_sensor_age.return_value = DeviceAgeInfo(days=5)
+    client.create_glucose.return_value = SensorGlucose(mgdl=120)
+    client.create_treatment.return_value = MagicMock()
     return client
 
 

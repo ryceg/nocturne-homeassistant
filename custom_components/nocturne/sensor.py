@@ -42,7 +42,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="current_glucose",
         name="Current Glucose",
-        device_class=SensorDeviceClass.BLOOD_GLUCOSE,
+        device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
         native_unit_of_measurement="mg/dL",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:diabetes",
@@ -61,7 +61,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         enum_options=[
             "None", "DoubleUp", "SingleUp", "FortyFiveUp", "Flat",
             "FortyFiveDown", "SingleDown", "DoubleDown",
-            "NOT COMPUTABLE", "RATE OUT OF RANGE",
+            "NotComputable", "RateOutOfRange",
         ],
     ),
     NocturneSensorDescription(
@@ -87,13 +87,13 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="predicted_bg",
         name="Predicted BG",
-        device_class=SensorDeviceClass.BLOOD_GLUCOSE,
+        device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
         native_unit_of_measurement="mg/dL",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:crystal-ball",
         coordinator_key="glucose",
-        value_fn=lambda d: d["aps"].eventualBg if d.get("aps") else None,
-        available_fn=lambda d: d.get("aps") is not None and d["aps"].eventualBg is not None,
+        value_fn=lambda d: d["aps"].eventual_bg if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].eventual_bg is not None,
     ),
     NocturneSensorDescription(
         key="loop_status",
@@ -115,8 +115,8 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:iv-bag",
         coordinator_key="glucose",
-        value_fn=lambda d: d["aps"].enactedRate if d.get("aps") else None,
-        available_fn=lambda d: d.get("aps") is not None and d["aps"].enactedRate is not None,
+        value_fn=lambda d: d["aps"].enacted_rate if d.get("aps") else None,
+        available_fn=lambda d: d.get("aps") is not None and d["aps"].enacted_rate is not None,
     ),
 ]
 
@@ -139,8 +139,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:battery",
         coordinator_key="device",
-        value_fn=lambda d: d["pump"].batteryPercent if d.get("pump") else None,
-        available_fn=lambda d: d.get("pump") is not None and d["pump"].batteryPercent is not None,
+        value_fn=lambda d: d["pump"].battery_percent if d.get("pump") else None,
+        available_fn=lambda d: d.get("pump") is not None and d["pump"].battery_percent is not None,
     ),
     NocturneSensorDescription(
         key="cgm_battery",
@@ -171,8 +171,8 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:target",
         coordinator_key="device",
-        value_fn=lambda d: d["daily_summary"].timeInRangePercent if d.get("daily_summary") else None,
-        available_fn=lambda d: d.get("daily_summary") is not None and d["daily_summary"].timeInRangePercent is not None,
+        value_fn=lambda d: d["daily_summary"].time_in_range_percent if d.get("daily_summary") else None,
+        available_fn=lambda d: d.get("daily_summary") is not None and d["daily_summary"].time_in_range_percent is not None,
     ),
 ]
 

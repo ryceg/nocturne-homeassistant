@@ -163,11 +163,7 @@ class NocturneApiClient:
             with self._client() as client:
                 api = V4DeviceAgeApi(client)
                 resp = api.device_age_get_sensor_age()
-                # SensorAgeInfo has a 'Sensor Start' field of type DeviceAgeInfo
-                sensor_start = getattr(resp, "Sensor Start", None)
-                if sensor_start is None:
-                    sensor_start = getattr(resp, "Sensor_Start", None)
-                return sensor_start
+                return resp.sensor_start
 
         return await asyncio.to_thread(_call)
 

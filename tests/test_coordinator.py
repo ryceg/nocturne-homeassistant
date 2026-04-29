@@ -5,9 +5,10 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aiohttp import ClientResponseError
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from nocturne_sdk import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
+from nocturne_sdk.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
 
 from custom_components.nocturne.coordinator import (
     DeviceCoordinator,
@@ -15,19 +16,20 @@ from custom_components.nocturne.coordinator import (
 )
 
 
-def _make_client_response_error(status: int) -> ClientResponseError:
-    return ClientResponseError(
-        request_info=MagicMock(), history=(), status=status, message=f"HTTP {status}"
-    )
+def _make_api_exception(status: int) -> ApiException:
+    return ApiException(status=status, reason=f"HTTP {status}")
 
 
 @pytest.fixture
 def mock_client() -> AsyncMock:
     client = AsyncMock()
-    client.get_latest_entry.return_value = {"sgv": 120}
-    client.get_latest_device_status.return_value = {"pump": {}}
-    client.get_active_profile.return_value = {"name": "Default"}
-    client.get_report_summary.return_value = {"timeInRange": 72.5}
+    client.get_latest_glucose.return_value = SensorGlucose(mgdl=120)
+    client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=1.5)
+    client.get_latest_pump_snapshot.return_value = PumpSnapshot(reservoir=150.0)
+    client.get_latest_uploader_snapshot.return_value = UploaderSnapshot(battery=90)
+    client.get_profile_summary.return_value = ProfileSummary()
+    client.get_daily_summary.return_value = DailySummaryDay(time_in_range_percent=72.5)
+    client.get_sensor_age.return_value = DeviceAgeInfo(days=5)
     return client
 
 
@@ -42,32 +44,32 @@ class TestGlucoseCoordinator:
     async def test_success(self, mock_hass, mock_client):
         coord = GlucoseCoordinator(mock_hass, mock_client)
         result = await coord._async_update_data()
-        assert result["entry"] == {"sgv": 120}
-        assert result["device_status"] == {"pump": {}}
+        assert result["glucose"].mgdl == 120
+        assert result["aps"].iob == 1.5
         assert coord._refresh_failed is False
 
     async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_entry.side_effect = _make_client_response_error(401)
+        mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
         coord = GlucoseCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="Auth failed"):
             await coord._async_update_data()
         assert coord._refresh_failed is True
 
     async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_entry.side_effect = _make_client_response_error(401)
+        mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
         coord = GlucoseCoordinator(mock_hass, mock_client)
         coord._refresh_failed = True
         with pytest.raises(ConfigEntryAuthFailed, match="OAuth token expired"):
             await coord._async_update_data()
 
     async def test_other_http_error_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_entry.side_effect = _make_client_response_error(500)
+        mock_client.get_latest_glucose.side_effect = _make_api_exception(500)
         coord = GlucoseCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="API error: 500"):
             await coord._async_update_data()
 
     async def test_generic_exception_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_entry.side_effect = OSError("DNS failure")
+        mock_client.get_latest_glucose.side_effect = OSError("DNS failure")
         coord = GlucoseCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="Error fetching data"):
             await coord._async_update_data()
@@ -77,31 +79,32 @@ class TestDeviceCoordinator:
     async def test_success(self, mock_hass, mock_client):
         coord = DeviceCoordinator(mock_hass, mock_client)
         result = await coord._async_update_data()
-        assert result["device_status"] == {"pump": {}}
-        assert result["profile"] == {"name": "Default"}
-        assert result["report"] == {"timeInRange": 72.5}
+        assert result["pump"].reservoir == 150.0
+        assert result["uploader"].battery == 90
+        assert result["daily_summary"].time_in_range_percent == 72.5
+        assert result["sensor_age"].days == 5
 
     async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_device_status.side_effect = _make_client_response_error(401)
+        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
         coord = DeviceCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="Auth failed"):
             await coord._async_update_data()
 
     async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_device_status.side_effect = _make_client_response_error(401)
+        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
         coord = DeviceCoordinator(mock_hass, mock_client)
         coord._refresh_failed = True
         with pytest.raises(ConfigEntryAuthFailed):
             await coord._async_update_data()
 
     async def test_other_http_error(self, mock_hass, mock_client):
-        mock_client.get_latest_device_status.side_effect = _make_client_response_error(503)
+        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(503)
         coord = DeviceCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="API error: 503"):
             await coord._async_update_data()
 
     async def test_generic_exception(self, mock_hass, mock_client):
-        mock_client.get_latest_device_status.side_effect = RuntimeError("boom")
+        mock_client.get_latest_pump_snapshot.side_effect = RuntimeError("boom")
         coord = DeviceCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="Error fetching data"):
             await coord._async_update_data()

@@ -1,145 +1,68 @@
-"""Tests for NocturneApiClient (aiohttp-level mocks)."""
+"""Tests for NocturneApiClient (SDK-based, mocking nocturne_sdk API classes)."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from aiohttp import ClientResponseError
+from nocturne_sdk import (
+    ApiException,
+    ApsSnapshot,
+    PumpSnapshot,
+    SensorGlucose,
+    Treatment,
+    UploaderSnapshot,
+)
+from nocturne_sdk.models import DailySummaryDay, DailySummaryResponse, ProfileSummary
 
 from custom_components.nocturne.api import NocturneApiClient
 
 
-def _mock_response(status: int = 200, json_data=None) -> AsyncMock:
-    """Create a mock aiohttp response."""
-    resp = AsyncMock()
-    resp.status = status
-    resp.json = AsyncMock(return_value=json_data)
-    resp.raise_for_status = MagicMock()
-    if status >= 400:
-        resp.raise_for_status.side_effect = ClientResponseError(
-            request_info=MagicMock(),
-            history=(),
-            status=status,
-            message=f"HTTP {status}",
-        )
-    return resp
-
-
 @pytest.fixture
-def session() -> AsyncMock:
-    return AsyncMock()
-
-
-@pytest.fixture
-def client(session: AsyncMock) -> NocturneApiClient:
-    return NocturneApiClient(session, "https://example.com", access_token="test-token")
+def client() -> NocturneApiClient:
+    return NocturneApiClient("https://example.com", access_token="test-token")
 
 
 class TestValidateConnection:
-    async def test_success(self, client, session):
-        session.get.return_value = _mock_response(200)
-        assert await client.validate_connection() is True
+    async def test_success(self, client):
+        with patch(
+            "custom_components.nocturne.api.StatusApi"
+        ) as mock_api_cls:
+            mock_api = MagicMock()
+            mock_api.status_get_status.return_value = MagicMock(status="ok")
+            mock_api_cls.return_value.__enter__ = MagicMock(return_value=mock_api)
+            mock_api_cls.return_value.__exit__ = MagicMock(return_value=False)
+            # The SDK is called inside asyncio.to_thread, so we mock at the API class level
+            with patch("custom_components.nocturne.api.ApiClient") as mock_client_cls:
+                ctx = MagicMock()
+                ctx.__enter__ = MagicMock(return_value=ctx)
+                ctx.__exit__ = MagicMock(return_value=False)
+                mock_client_cls.return_value = ctx
+                mock_api_cls.return_value = mock_api
+                assert await client.validate_connection() is True
 
-    async def test_non_200(self, client, session):
-        session.get.return_value = _mock_response(404)
-        assert await client.validate_connection() is False
-
-    async def test_network_error(self, client, session):
-        session.get.side_effect = Exception("Connection refused")
-        assert await client.validate_connection() is False
-
-
-class TestGetLatestEntry:
-    async def test_returns_first_entry(self, client, session):
-        session.get.return_value = _mock_response(200, [{"sgv": 120}])
-        result = await client.get_latest_entry()
-        assert result == {"sgv": 120}
-
-    async def test_empty_list_returns_none(self, client, session):
-        session.get.return_value = _mock_response(200, [])
-        result = await client.get_latest_entry()
-        assert result is None
-
-    async def test_client_error_raises(self, client, session):
-        session.get.return_value = _mock_response(401)
-        with pytest.raises(ClientResponseError):
-            await client.get_latest_entry()
+    async def test_exception_returns_false(self, client):
+        with patch(
+            "custom_components.nocturne.api.ApiClient"
+        ) as mock_client_cls:
+            ctx = MagicMock()
+            ctx.__enter__ = MagicMock(side_effect=Exception("Connection refused"))
+            ctx.__exit__ = MagicMock(return_value=False)
+            mock_client_cls.return_value = ctx
+            assert await client.validate_connection() is False
 
 
-class TestGetLatestDeviceStatus:
-    async def test_returns_first_status(self, client, session):
-        session.get.return_value = _mock_response(200, [{"pump": {}}])
-        result = await client.get_latest_device_status()
-        assert result == {"pump": {}}
+class TestEnsureToken:
+    async def test_uses_static_token(self, client):
+        await client._ensure_token()
+        assert client._config.access_token == "test-token"
 
-    async def test_empty_list_returns_none(self, client, session):
-        session.get.return_value = _mock_response(200, [])
-        assert await client.get_latest_device_status() is None
-
-
-class TestGetActiveProfile:
-    async def test_returns_profile(self, client, session):
-        session.get.return_value = _mock_response(200, {"name": "Default"})
-        result = await client.get_active_profile()
-        assert result == {"name": "Default"}
-
-
-class TestGetReportSummary:
-    async def test_returns_report(self, client, session):
-        session.get.return_value = _mock_response(200, {"timeInRange": 72.5})
-        result = await client.get_report_summary()
-        assert result == {"timeInRange": 72.5}
-
-
-class TestPostEntry:
-    async def test_success(self, client, session):
-        session.post.return_value = _mock_response(200)
-        assert await client.post_entry({"sgv": 120}) is True
-
-    async def test_client_error_raises(self, client, session):
-        session.post.return_value = _mock_response(401)
-        with pytest.raises(ClientResponseError):
-            await client.post_entry({"sgv": 120})
-
-    async def test_generic_error_returns_false(self, client, session):
-        session.post.side_effect = OSError("Network error")
-        assert await client.post_entry({"sgv": 120}) is False
-
-
-class TestPostTreatment:
-    async def test_success(self, client, session):
-        session.post.return_value = _mock_response(200)
-        assert await client.post_treatment({"carbs": 30}) is True
-
-    async def test_client_error_raises(self, client, session):
-        session.post.return_value = _mock_response(500)
-        with pytest.raises(ClientResponseError):
-            await client.post_treatment({"carbs": 30})
-
-    async def test_generic_error_returns_false(self, client, session):
-        session.post.side_effect = OSError("Network error")
-        assert await client.post_treatment({"carbs": 30}) is False
-
-
-class TestHeaders:
-    async def test_uses_access_token(self, client):
-        headers = await client._headers
-        assert headers == {"Authorization": "Bearer test-token"}
-
-    async def test_uses_oauth_session_when_available(self, session):
+    async def test_uses_oauth_session(self):
         oauth_session = AsyncMock()
         oauth_session.token = {"access_token": "oauth-token"}
         client = NocturneApiClient(
-            session, "https://example.com", oauth_session=oauth_session
+            "https://example.com", oauth_session=oauth_session
         )
-        headers = await client._headers
-        assert headers == {"Authorization": "Bearer oauth-token"}
+        await client._ensure_token()
+        assert client._config.access_token == "oauth-token"
         oauth_session.async_ensure_token_valid.assert_awaited_once()
-
-
-class TestGetGenericErrors:
-    async def test_non_client_error_returns_none(self, client, session):
-        session.get.side_effect = OSError("DNS failure")
-        result = await client.get_active_profile()
-        assert result is None

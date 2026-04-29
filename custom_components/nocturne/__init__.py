@@ -107,7 +107,7 @@ def _register_services(hass: HomeAssistant) -> None:
         client = _get_client(hass)
         await client.create_treatment(
             Treatment(
-                eventType="Carb Correction",
+                event_type="Carb Correction",
                 carbs=call.data["carbs"],
                 notes=call.data.get("notes", ""),
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
@@ -118,7 +118,7 @@ def _register_services(hass: HomeAssistant) -> None:
         client = _get_client(hass)
         await client.create_treatment(
             Treatment(
-                eventType="Correction Bolus",
+                event_type="Correction Bolus",
                 insulin=call.data["insulin"],
                 notes=call.data.get("notes", ""),
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
@@ -136,7 +136,7 @@ def _register_services(hass: HomeAssistant) -> None:
         client = _get_client(hass)
         await client.create_treatment(
             Treatment(
-                eventType="Exercise",
+                event_type="Exercise",
                 duration=call.data["duration"],
                 notes=call.data.get("notes", ""),
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
