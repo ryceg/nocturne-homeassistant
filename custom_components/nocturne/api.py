@@ -11,23 +11,29 @@ from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
     ApiClient,
     ApsSnapshot,
+    ApsSnapshotApi,
+    Bolus,
+    BolusApi,
+    CarbIntake,
     Configuration,
+    CreateBolusRequest,
+    CreateCarbIntakeRequest,
+    CreateStateSpanRequest,
+    DataOverviewApi,
+    DeviceAgeApi,
     DeviceAgeInfo,
+    NutritionApi,
+    ProfileApi,
     PumpSnapshot,
+    PumpSnapshotApi,
     SensorGlucose,
+    SensorGlucoseApi,
+    StateSpan,
+    StateSpansApi,
     StatusApi,
-    Treatment,
     UploaderSnapshot,
+    UploaderSnapshotApi,
     UpsertSensorGlucoseRequest,
-    V4APSSnapshotsApi,
-    V4BatteryApi,
-    V4DataOverviewApi,
-    V4DeviceAgeApi,
-    V4ProfileApi,
-    V4PumpSnapshotsApi,
-    V4SensorGlucoseApi,
-    V4TreatmentsApi,
-    V4UploaderSnapshotsApi,
 )
 from nocturne_py.models import DailySummaryDay, ProfileSummary
 
@@ -79,7 +85,7 @@ class NocturneApiClient:
 
         def _call() -> SensorGlucose | None:
             with self._client() as client:
-                api = V4SensorGlucoseApi(client)
+                api = SensorGlucoseApi(client)
                 resp = api.sensor_glucose_get_all(limit=1, sort="desc")
                 if resp.data:
                     return resp.data[0]
@@ -93,7 +99,7 @@ class NocturneApiClient:
 
         def _call() -> ApsSnapshot | None:
             with self._client() as client:
-                api = V4APSSnapshotsApi(client)
+                api = ApsSnapshotApi(client)
                 resp = api.aps_snapshot_get_all(limit=1, sort="desc")
                 if resp.data:
                     return resp.data[0]
@@ -107,7 +113,7 @@ class NocturneApiClient:
 
         def _call() -> PumpSnapshot | None:
             with self._client() as client:
-                api = V4PumpSnapshotsApi(client)
+                api = PumpSnapshotApi(client)
                 resp = api.pump_snapshot_get_all(limit=1, sort="desc")
                 if resp.data:
                     return resp.data[0]
@@ -121,7 +127,7 @@ class NocturneApiClient:
 
         def _call() -> UploaderSnapshot | None:
             with self._client() as client:
-                api = V4UploaderSnapshotsApi(client)
+                api = UploaderSnapshotApi(client)
                 resp = api.uploader_snapshot_get_all(limit=1, sort="desc")
                 if resp.data:
                     return resp.data[0]
@@ -135,7 +141,7 @@ class NocturneApiClient:
 
         def _call() -> ProfileSummary | None:
             with self._client() as client:
-                api = V4ProfileApi(client)
+                api = ProfileApi(client)
                 return api.profile_get_profile_summary()
 
         return await asyncio.to_thread(_call)
@@ -147,7 +153,7 @@ class NocturneApiClient:
 
         def _call() -> DailySummaryDay | None:
             with self._client() as client:
-                api = V4DataOverviewApi(client)
+                api = DataOverviewApi(client)
                 resp = api.data_overview_get_daily_summary(year=year)
                 if resp.days:
                     return resp.days[-1]
@@ -161,7 +167,7 @@ class NocturneApiClient:
 
         def _call() -> DeviceAgeInfo | None:
             with self._client() as client:
-                api = V4DeviceAgeApi(client)
+                api = DeviceAgeApi(client)
                 resp = api.device_age_get_sensor_age()
                 return resp.sensor_start
 
@@ -175,19 +181,45 @@ class NocturneApiClient:
 
         def _call() -> SensorGlucose | None:
             with self._client() as client:
-                api = V4SensorGlucoseApi(client)
-                req = UpsertSensorGlucoseRequest(mgdl=mgdl, dataSource=data_source)
+                api = SensorGlucoseApi(client)
+                req = UpsertSensorGlucoseRequest(mgdl=mgdl, data_source=data_source)
                 return api.sensor_glucose_create(req)
 
         return await asyncio.to_thread(_call)
 
-    async def create_treatment(self, treatment: Treatment) -> Treatment | None:
-        """Post a treatment (carbs, insulin, etc.)."""
+    async def create_carb_intake(
+        self, request: CreateCarbIntakeRequest
+    ) -> CarbIntake | None:
+        """Post a carbohydrate intake record."""
         await self._ensure_token()
 
-        def _call() -> Treatment | None:
+        def _call() -> CarbIntake | None:
             with self._client() as client:
-                api = V4TreatmentsApi(client)
-                return api.treatments_create_treatment(treatment)
+                api = NutritionApi(client)
+                return api.nutrition_create_carb_intake(request)
+
+        return await asyncio.to_thread(_call)
+
+    async def create_bolus(self, request: CreateBolusRequest) -> Bolus | None:
+        """Post a bolus (insulin delivery) record."""
+        await self._ensure_token()
+
+        def _call() -> Bolus | None:
+            with self._client() as client:
+                api = BolusApi(client)
+                return api.bolus_create(request)
+
+        return await asyncio.to_thread(_call)
+
+    async def create_state_span(
+        self, request: CreateStateSpanRequest
+    ) -> StateSpan | None:
+        """Post a state span (activity, exercise, etc.) record."""
+        await self._ensure_token()
+
+        def _call() -> StateSpan | None:
+            with self._client() as client:
+                api = StateSpansApi(client)
+                return api.state_spans_create_state_span(request)
 
         return await asyncio.to_thread(_call)

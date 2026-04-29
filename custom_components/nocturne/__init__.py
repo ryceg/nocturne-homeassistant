@@ -12,7 +12,14 @@ from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
 )
-from nocturne_py import Treatment
+from nocturne_py import (
+    CreateBolusRequest,
+    CreateCarbIntakeRequest,
+    CreateStateSpanRequest,
+    StateSpanCategory,
+)
+
+from datetime import datetime, timezone
 
 from .api import NocturneApiClient
 from .const import CONF_INSTANCE_URL, DATA_SOURCE_HOME_ASSISTANT, DOMAIN
@@ -105,22 +112,18 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_log_carbs(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.create_treatment(
-            Treatment(
-                event_type="Carb Correction",
+        await client.create_carb_intake(
+            CreateCarbIntakeRequest(
                 carbs=call.data["carbs"],
-                notes=call.data.get("notes", ""),
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
             )
         )
 
     async def handle_log_insulin(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.create_treatment(
-            Treatment(
-                event_type="Correction Bolus",
+        await client.create_bolus(
+            CreateBolusRequest(
                 insulin=call.data["insulin"],
-                notes=call.data.get("notes", ""),
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
             )
         )
@@ -134,12 +137,16 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_log_activity(call: ServiceCall) -> None:
         client = _get_client(hass)
-        await client.create_treatment(
-            Treatment(
-                event_type="Exercise",
-                duration=call.data["duration"],
-                notes=call.data.get("notes", ""),
-                data_source=DATA_SOURCE_HOME_ASSISTANT,
+        now = datetime.now(timezone.utc)
+        start_mills = int(now.timestamp() * 1000)
+        duration_mins = call.data["duration"]
+        end_mills = start_mills + (duration_mins * 60 * 1000)
+        await client.create_state_span(
+            CreateStateSpanRequest(
+                category=StateSpanCategory.EXERCISE,
+                start_mills=start_mills,
+                end_mills=end_mills,
+                source=DATA_SOURCE_HOME_ASSISTANT,
             )
         )
 

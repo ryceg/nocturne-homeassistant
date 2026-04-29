@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
-from nocturne_py import Treatment
+from nocturne_py import CreateBolusRequest, CreateCarbIntakeRequest, CreateStateSpanRequest, StateSpanCategory
 
 from custom_components.nocturne import (
     _get_client,
@@ -63,12 +63,11 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        mock_api_client.create_treatment.assert_awaited_once()
-        treatment = mock_api_client.create_treatment.call_args[0][0]
-        assert isinstance(treatment, Treatment)
-        assert treatment.event_type == "Carb Correction"
-        assert treatment.carbs == 30.0
-        assert treatment.data_source == DATA_SOURCE_HOME_ASSISTANT
+        mock_api_client.create_carb_intake.assert_awaited_once()
+        carb_intake = mock_api_client.create_carb_intake.call_args[0][0]
+        assert isinstance(carb_intake, CreateCarbIntakeRequest)
+        assert carb_intake.carbs == 30.0
+        assert carb_intake.data_source == DATA_SOURCE_HOME_ASSISTANT
 
     async def test_log_insulin(self, hass_with_services, mock_api_client):
         handler = hass_with_services["log_insulin"]
@@ -77,10 +76,11 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        treatment = mock_api_client.create_treatment.call_args[0][0]
-        assert isinstance(treatment, Treatment)
-        assert treatment.event_type == "Correction Bolus"
-        assert treatment.insulin == 5.0
+        mock_api_client.create_bolus.assert_awaited_once()
+        bolus_request = mock_api_client.create_bolus.call_args[0][0]
+        assert isinstance(bolus_request, CreateBolusRequest)
+        assert bolus_request.insulin == 5.0
+        assert bolus_request.data_source == DATA_SOURCE_HOME_ASSISTANT
 
     async def test_log_glucose(self, hass_with_services, mock_api_client):
         handler = hass_with_services["log_glucose"]
@@ -101,7 +101,9 @@ class TestServiceHandlers:
 
         await handler(call)
 
-        treatment = mock_api_client.create_treatment.call_args[0][0]
-        assert isinstance(treatment, Treatment)
-        assert treatment.event_type == "Exercise"
-        assert treatment.duration == 30
+        mock_api_client.create_state_span.assert_awaited_once()
+        state_span_request = mock_api_client.create_state_span.call_args[0][0]
+        assert isinstance(state_span_request, CreateStateSpanRequest)
+        assert state_span_request.category == StateSpanCategory.EXERCISE
+        assert state_span_request.source == DATA_SOURCE_HOME_ASSISTANT
+        assert state_span_request.end_mills - state_span_request.start_mills == 30 * 60 * 1000

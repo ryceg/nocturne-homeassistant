@@ -10,7 +10,6 @@ from nocturne_py import (
     ApsSnapshot,
     PumpSnapshot,
     SensorGlucose,
-    Treatment,
     UploaderSnapshot,
 )
 from nocturne_py.models import DailySummaryDay, DailySummaryResponse, ProfileSummary
