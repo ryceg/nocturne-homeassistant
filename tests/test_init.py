@@ -110,20 +110,22 @@ class TestServiceHandlers:
 
     async def test_acknowledge_alert(self, mock_hass, mock_api_client):
         """Test acknowledge_alert calls signalr_client.acknowledge."""
-        # Set up a mock signalr_client in hass.data
+        # Set up a mock signalr_client in the per-entry namespace
         mock_signalr = AsyncMock()
         mock_signalr.connected = True
-        mock_hass.data[DOMAIN]["signalr_client"] = mock_signalr
+        entry_id = "test_entry_id"
+        mock_hass.data[DOMAIN][entry_id]["signalr_client"] = mock_signalr
+        mock_hass.data[DOMAIN][entry_id]["instance_name"] = "my-instance"
 
-        # Set up mock config entry for client_id lookup
+        # Build a mock entry to pass to _register_services
         mock_entry = MagicMock()
+        mock_entry.entry_id = entry_id
         mock_entry.data = {"client_id": "my-instance"}
-        mock_hass.config_entries.async_get_entry.return_value = mock_entry
 
         # Register services and extract handler
         mock_hass.services = MagicMock()
         mock_hass.services.has_service.return_value = False
-        _register_services(mock_hass)
+        _register_services(mock_hass, mock_entry)
         handlers = {}
         for call in mock_hass.services.async_register.call_args_list:
             service_name = call.args[1]
