@@ -15,9 +15,21 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 SEVERITY_PUSH_MAP = {
-    "critical": {"push": {"interruption-level": "critical"}},
-    "warning": {"push": {"interruption-level": "time-sensitive"}},
-    "info": {"push": {"interruption-level": "active"}},
+    "critical": {
+        "push": {"interruption-level": "critical"},
+        "priority": "high",
+        "channel": "nocturne_critical",
+    },
+    "warning": {
+        "push": {"interruption-level": "time-sensitive"},
+        "priority": "high",
+        "channel": "nocturne_warning",
+    },
+    "info": {
+        "push": {"interruption-level": "active"},
+        "priority": "default",
+        "channel": "nocturne_info",
+    },
 }
 
 
@@ -43,7 +55,7 @@ class NocturneAlertHandler:
             "severity": severity,
             "message": message,
             "glucose_value": glucose_value,
-            "glucose_unit": "mg/dL",
+            "glucose_unit": payload.get("glucoseUnit", "mg/dL"),
             "trend": trend,
             "ack_able": payload.get("ackAble", False),
             "channel_id": payload.get("channelId", ""),
@@ -51,19 +63,25 @@ class NocturneAlertHandler:
         })
 
         # 2. Persistent notification
-        await self._hass.services.async_call(
-            "persistent_notification", "create",
-            {"title": f"Nocturne: {rule_name}", "message": message, "notification_id": f"nocturne_alert_{excursion_id}"},
-        )
+        try:
+            await self._hass.services.async_call(
+                "persistent_notification", "create",
+                {"title": f"Nocturne: {rule_name}", "message": message, "notification_id": f"nocturne_alert_{excursion_id}"},
+            )
+        except Exception:
+            _LOGGER.exception("Failed to create persistent notification for %s", excursion_id)
 
         # 3. Mobile push
         push_data = self._map_push_severity(severity)
         for service in self._notify_services:
             service_name = service.removeprefix("notify.")
-            await self._hass.services.async_call(
-                "notify", service_name,
-                {"title": f"Nocturne: {rule_name}", "message": message, "data": push_data},
-            )
+            try:
+                await self._hass.services.async_call(
+                    "notify", service_name,
+                    {"title": f"Nocturne: {rule_name}", "message": message, "data": push_data},
+                )
+            except Exception:
+                _LOGGER.exception("Failed to send push to notify.%s", service_name)
 
     async def handle_alert_resolved(self, payload: dict[str, Any]) -> None:
         excursion_id = payload.get("excursionId", "")

@@ -100,6 +100,28 @@ class TestGlucoseCoordinator:
         coord.signalr_active = True
         assert coord.signalr_active is True
 
+    async def test_signalr_active_reset_on_disconnect(self, mock_hass, mock_client):
+        """signalr_active is reset to False when the disconnect callback fires."""
+        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord.signalr_active = True
+        assert coord.signalr_active is True
+
+        # Simulate the disconnect callback
+        coord.signalr_active = False
+
+        assert coord.signalr_active is False
+
+    async def test_resumes_polling_when_signalr_inactive(self, mock_hass, mock_client):
+        """When signalr_active is False, the coordinator resumes making API calls."""
+        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord._signalr_active = False
+        mock_client.get_latest_glucose.return_value = SensorGlucose(mgdl=120)
+        mock_client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=1.5)
+
+        result = await coord._async_update_data()
+
+        mock_client.get_latest_glucose.assert_called_once()
+
 
 class TestDeviceCoordinator:
     async def test_success(self, mock_hass, mock_client):

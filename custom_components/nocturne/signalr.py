@@ -28,6 +28,8 @@ class NocturneSignalRClient:
         on_alert_dispatch: AsyncCallback,
         on_alert_resolved: AsyncCallback,
         on_alert_acknowledged: AsyncCallback,
+        async_get_token: Callable[[], Coroutine[Any, Any, str]] | None = None,
+        on_disconnected: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         self._hass = hass
         self._instance_url = instance_url.rstrip("/")
@@ -37,6 +39,8 @@ class NocturneSignalRClient:
         self._on_alert_dispatch = on_alert_dispatch
         self._on_alert_resolved = on_alert_resolved
         self._on_alert_acknowledged = on_alert_acknowledged
+        self._async_get_token = async_get_token
+        self._on_disconnected_cb = on_disconnected
         self._client: SignalRClient | None = None
         self._task: asyncio.Task | None = None
         self._connected = False
@@ -83,6 +87,12 @@ class NocturneSignalRClient:
         _LOGGER.debug("Sent ack for excursion %s by %s", excursion_id, acknowledged_by)
 
     async def _on_connected(self) -> None:
+        # Refresh token if callback provided
+        if self._async_get_token:
+            try:
+                self._access_token = await self._async_get_token()
+            except Exception:
+                _LOGGER.warning("Failed to refresh token before subscribe")
         self._connected = True
         _LOGGER.info("SignalR connected, subscribing as instance %s", self._instance_id)
         if self._client:
@@ -91,6 +101,8 @@ class NocturneSignalRClient:
     async def _on_disconnected(self) -> None:
         self._connected = False
         _LOGGER.warning("SignalR connection lost, will reconnect automatically")
+        if self._on_disconnected_cb:
+            await self._on_disconnected_cb()
 
     async def _handle_glucose_reading(self, raw: Any) -> None:
         try:

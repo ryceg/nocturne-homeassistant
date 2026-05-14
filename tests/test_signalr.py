@@ -71,3 +71,26 @@ async def test_handle_unwraps_list(signalr_client):
 async def test_acknowledge_raises_when_not_connected(signalr_client):
     with pytest.raises(ConnectionError):
         await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+
+@pytest.mark.asyncio
+async def test_disconnect_callback_called_on_disconnected(mock_hass):
+    """on_disconnected callback is invoked when _on_disconnected fires."""
+    on_disconnect = AsyncMock()
+    client = NocturneSignalRClient(
+        hass=mock_hass,
+        instance_url="https://nocturne.example.com",
+        access_token="test-token",
+        instance_id="test-client-id",
+        on_glucose_reading=AsyncMock(),
+        on_alert_dispatch=AsyncMock(),
+        on_alert_resolved=AsyncMock(),
+        on_alert_acknowledged=AsyncMock(),
+        on_disconnected=on_disconnect,
+    )
+    client._connected = True
+
+    await client._on_disconnected()
+
+    assert client._connected is False
+    on_disconnect.assert_awaited_once()
