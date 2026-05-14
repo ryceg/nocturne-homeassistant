@@ -20,6 +20,15 @@ DEFAULT_SCOPES = [
     "profile.read",
     "heartrate.readwrite",
     "stepcount.readwrite",
+    "alerts.read",
 ]
+
+CONF_NOTIFY_SERVICES = "notify_services"
+
+EVENT_NOCTURNE_ALERT = "nocturne_alert"
+EVENT_NOCTURNE_ALERT_RESOLVED = "nocturne_alert_resolved"
+EVENT_NOCTURNE_ALERT_ACKNOWLEDGED = "nocturne_alert_acknowledged"
+
+SIGNALR_HUB_PATH = "/hubs/home-assistant"
 
 DATA_SOURCE_HOME_ASSISTANT = "home-assistant-connector"
