@@ -15,5 +15,28 @@
     "abort": {
       "already_configured": "This Nocturne instance is already configured."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Nocturne Alert Settings",
+        "description": "Configure which notification services receive Nocturne alerts.",
+        "data": {
+          "notify_services": "Notification services"
+        }
+      }
+    }
+  },
+  "services": {
+    "acknowledge_alert": {
+      "name": "Acknowledge Alert",
+      "description": "Acknowledge an active Nocturne alert excursion",
+      "fields": {
+        "excursion_id": {
+          "name": "Excursion ID",
+          "description": "The ID of the alert excursion to acknowledge"
+        }
+      }
+    }
   }
 }

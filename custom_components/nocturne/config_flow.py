@@ -10,8 +10,9 @@ from typing import Any
 
 import voluptuous as vol
 from aiohttp import ClientSession
-from homeassistant.config_entries import ConfigFlowResult
-from homeassistant.core import HomeAssistant
+from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     AbstractOAuth2FlowHandler,
@@ -26,6 +27,7 @@ from .const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
+    CONF_NOTIFY_SERVICES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
     DOMAIN,
@@ -132,10 +134,55 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
         return await resp.json()
 
 
+class NocturneOptionsFlowHandler(OptionsFlow):
+    """Handle options flow for Nocturne — lets users pick notify services."""
+
+    def __init__(self, config_entry) -> None:
+        """Initialize the options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Show the form for selecting notification services."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        # Build a dict of available notify.* services
+        notify_services: dict[str, str] = {}
+        services = self.hass.services.async_services()
+        for service_name in sorted(services.get("notify", {})):
+            notify_services[service_name] = service_name
+
+        current_selection: list[str] = self.config_entry.options.get(
+            CONF_NOTIFY_SERVICES, []
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_NOTIFY_SERVICES,
+                        default=current_selection,
+                    ): vol.All(
+                        cv.multi_select(notify_services),
+                    ),
+                }
+            ),
+        )
+
+
 class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
     """Handle the OAuth2 config flow for Nocturne."""
 
     DOMAIN = DOMAIN
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        """Return the options flow handler."""
+        return NocturneOptionsFlowHandler(config_entry)
 
     def __init__(self) -> None:
         super().__init__()
