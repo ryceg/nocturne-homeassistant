@@ -22,17 +22,20 @@ from nocturne_py import (
 
 from datetime import datetime, timezone
 
+from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
 from .config_flow import NocturneOAuth2Implementation
 from .const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
+    CONF_NOTIFY_SERVICES,
     CONF_TOKEN_URL,
     DATA_SOURCE_HOME_ASSISTANT,
     DOMAIN,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
+from .signalr import NocturneSignalRClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +69,12 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
         vol.Required("duration"): vol.Coerce(int),
         vol.Optional("activity_type", default=""): str,
         vol.Optional("notes", default=""): str,
+    }
+)
+
+ACKNOWLEDGE_ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("excursion_id"): str,
     }
 )
 
@@ -106,19 +115,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
         "device_coordinator": device_coordinator,
     }
 
+    # Set up alert handler and SignalR client
+    notify_services: list[str] = entry.options.get(CONF_NOTIFY_SERVICES, [])
+    instance_name = entry.data.get(CONF_CLIENT_ID, "unknown")
+    alert_handler = NocturneAlertHandler(hass, notify_services, instance_name)
+
+    async def _on_glucose_reading(data: dict) -> None:
+        glucose_coordinator.push_glucose_data(data)
+        glucose_coordinator.signalr_active = True
+
+    async def _on_disconnected() -> None:
+        glucose_coordinator.signalr_active = False
+        _LOGGER.info("SignalR disconnected, resuming polling")
+
+    async def _get_fresh_token() -> str:
+        return entry.data["token"]["access_token"]
+
+    signalr_client = NocturneSignalRClient(
+        hass=hass,
+        instance_url=base_url,
+        access_token=entry.data["token"]["access_token"],
+        instance_id=entry.data.get(CONF_CLIENT_ID, ""),
+        on_glucose_reading=_on_glucose_reading,
+        on_alert_dispatch=alert_handler.handle_alert_dispatch,
+        on_alert_resolved=alert_handler.handle_alert_resolved,
+        on_alert_acknowledged=alert_handler.handle_alert_acknowledged,
+        async_get_token=_get_fresh_token,
+        on_disconnected=_on_disconnected,
+    )
+
+    hass.data[DOMAIN][entry.entry_id]["signalr_client"] = signalr_client
+    hass.data[DOMAIN][entry.entry_id]["instance_name"] = instance_name
+
+    try:
+        await signalr_client.start()
+    except Exception:
+        _LOGGER.warning(
+            "Failed to start SignalR connection; real-time updates unavailable",
+            exc_info=True,
+        )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    _register_services(hass)
+    _register_services(hass, entry)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Unload a config entry."""
+    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
+    signalr_client = entry_data.get("signalr_client")
+    if signalr_client:
+        await signalr_client.stop()
+
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.data[DOMAIN]:
-            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity"):
+            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity", "acknowledge_alert"):
                 hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
@@ -129,7 +183,7 @@ def _get_client(hass: HomeAssistant) -> NocturneApiClient:
     return hass.data[DOMAIN][entry_id]["client"]
 
 
-def _register_services(hass: HomeAssistant) -> None:
+def _register_services(hass: HomeAssistant, entry: NocturneConfigEntry | None = None) -> None:
     """Register HA services for writing data to Nocturne."""
     if hass.services.has_service(DOMAIN, "log_carbs"):
         return
@@ -186,3 +240,23 @@ def _register_services(hass: HomeAssistant) -> None:
     hass.services.async_register(
         DOMAIN, "log_activity", handle_log_activity, schema=LOG_ACTIVITY_SCHEMA
     )
+
+    # Capture at registration time, not at call time
+    captured_entry_id = entry.entry_id if entry is not None else None
+    captured_instance_name = entry.data.get(CONF_CLIENT_ID, "unknown") if entry is not None else "unknown"
+
+    async def handle_acknowledge_alert(call: ServiceCall) -> None:
+        excursion_id = call.data["excursion_id"]
+        signalr_client = hass.data[DOMAIN].get(captured_entry_id, {}).get("signalr_client")
+        if signalr_client is None or not signalr_client.connected:
+            _LOGGER.warning("Cannot acknowledge alert: SignalR not connected")
+            return
+        await signalr_client.acknowledge(excursion_id, f"homeassistant:{captured_instance_name}")
+
+    if not hass.services.has_service(DOMAIN, "acknowledge_alert"):
+        hass.services.async_register(
+            DOMAIN,
+            "acknowledge_alert",
+            handle_acknowledge_alert,
+            schema=ACKNOWLEDGE_ALERT_SCHEMA,
+        )

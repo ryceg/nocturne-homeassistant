@@ -32,8 +32,25 @@ class GlucoseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self.client = client
         self._refresh_failed = False
+        self._signalr_active = False
+
+    @property
+    def signalr_active(self) -> bool:
+        """Whether SignalR is actively pushing data."""
+        return self._signalr_active
+
+    @signalr_active.setter
+    def signalr_active(self, value: bool) -> None:
+        self._signalr_active = value
+
+    def push_glucose_data(self, data: dict[str, Any]) -> None:
+        """Accept data pushed from SignalR and notify listeners."""
+        self.async_set_updated_data(data)
 
     async def _async_update_data(self) -> dict[str, Any]:
+        if self._signalr_active:
+            return self.data
+
         try:
             glucose = await self.client.get_latest_glucose()
             aps = await self.client.get_latest_aps_snapshot()
