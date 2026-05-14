@@ -22,17 +22,20 @@ from nocturne_py import (
 
 from datetime import datetime, timezone
 
+from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
 from .config_flow import NocturneOAuth2Implementation
 from .const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
+    CONF_NOTIFY_SERVICES,
     CONF_TOKEN_URL,
     DATA_SOURCE_HOME_ASSISTANT,
     DOMAIN,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
+from .signalr import NocturneSignalRClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -112,6 +115,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
         "device_coordinator": device_coordinator,
     }
 
+    # Set up alert handler and SignalR client
+    notify_services: list[str] = entry.options.get(CONF_NOTIFY_SERVICES, [])
+    instance_name = entry.data.get(CONF_CLIENT_ID, "unknown")
+    alert_handler = NocturneAlertHandler(hass, notify_services, instance_name)
+
+    async def _on_glucose_reading(data: dict) -> None:
+        glucose_coordinator.push_glucose_data(data)
+        glucose_coordinator.signalr_active = True
+
+    signalr_client = NocturneSignalRClient(
+        hass=hass,
+        instance_url=base_url,
+        access_token=entry.data["token"]["access_token"],
+        instance_id=entry.data.get(CONF_CLIENT_ID, ""),
+        on_glucose_reading=_on_glucose_reading,
+        on_alert_dispatch=alert_handler.handle_alert_dispatch,
+        on_alert_resolved=alert_handler.handle_alert_resolved,
+        on_alert_acknowledged=alert_handler.handle_alert_acknowledged,
+    )
+
+    hass.data[DOMAIN]["signalr_client"] = signalr_client
+
+    try:
+        await signalr_client.start()
+    except Exception:
+        _LOGGER.warning(
+            "Failed to start SignalR connection; real-time updates unavailable",
+            exc_info=True,
+        )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _register_services(hass)
@@ -121,8 +154,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Unload a config entry."""
+    signalr_client = hass.data[DOMAIN].get("signalr_client")
+    if signalr_client:
+        await signalr_client.stop()
+
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop("signalr_client", None)
         if not hass.data[DOMAIN]:
             for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity", "acknowledge_alert"):
                 hass.services.async_remove(DOMAIN, service)
