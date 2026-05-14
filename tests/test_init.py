@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from nocturne_py import CreateBolusRequest, CreateCarbIntakeRequest, CreateStateSpanRequest, StateSpanCategory
@@ -11,7 +11,7 @@ from custom_components.nocturne import (
     _get_client,
     _register_services,
 )
-from custom_components.nocturne.const import DATA_SOURCE_HOME_ASSISTANT
+from custom_components.nocturne.const import DATA_SOURCE_HOME_ASSISTANT, DOMAIN
 
 
 class TestGetClient:
@@ -21,7 +21,7 @@ class TestGetClient:
 
 
 class TestRegisterServices:
-    def test_registers_all_four_services(self):
+    def test_registers_all_services(self):
         hass = MagicMock()
         hass.services.has_service.return_value = False
 
@@ -30,7 +30,7 @@ class TestRegisterServices:
         registered = {
             call.args[1] for call in hass.services.async_register.call_args_list
         }
-        assert registered == {"log_carbs", "log_insulin", "log_glucose", "log_activity"}
+        assert registered == {"log_carbs", "log_insulin", "log_glucose", "log_activity", "acknowledge_alert"}
 
     def test_skips_if_already_registered(self):
         hass = MagicMock()
@@ -107,3 +107,54 @@ class TestServiceHandlers:
         assert state_span_request.category == StateSpanCategory.EXERCISE
         assert state_span_request.source == DATA_SOURCE_HOME_ASSISTANT
         assert state_span_request.end_mills - state_span_request.start_mills == 30 * 60 * 1000
+
+    async def test_acknowledge_alert(self, mock_hass, mock_api_client):
+        """Test acknowledge_alert calls signalr_client.acknowledge."""
+        # Set up a mock signalr_client in hass.data
+        mock_signalr = AsyncMock()
+        mock_signalr.connected = True
+        mock_hass.data[DOMAIN]["signalr_client"] = mock_signalr
+
+        # Set up mock config entry for client_id lookup
+        mock_entry = MagicMock()
+        mock_entry.data = {"client_id": "my-instance"}
+        mock_hass.config_entries.async_get_entry.return_value = mock_entry
+
+        # Register services and extract handler
+        mock_hass.services = MagicMock()
+        mock_hass.services.has_service.return_value = False
+        _register_services(mock_hass)
+        handlers = {}
+        for call in mock_hass.services.async_register.call_args_list:
+            service_name = call.args[1]
+            handler_fn = call.args[2]
+            handlers[service_name] = handler_fn
+
+        handler = handlers["acknowledge_alert"]
+        call = MagicMock()
+        call.data = {"excursion_id": "exc-123"}
+
+        await handler(call)
+
+        mock_signalr.acknowledge.assert_awaited_once_with(
+            "exc-123", "homeassistant:my-instance"
+        )
+
+    async def test_acknowledge_alert_not_connected(self, mock_hass, mock_api_client):
+        """Test acknowledge_alert logs warning when signalr not connected."""
+        # No signalr_client in hass.data
+        mock_hass.services = MagicMock()
+        mock_hass.services.has_service.return_value = False
+        _register_services(mock_hass)
+        handlers = {}
+        for call in mock_hass.services.async_register.call_args_list:
+            service_name = call.args[1]
+            handler_fn = call.args[2]
+            handlers[service_name] = handler_fn
+
+        handler = handlers["acknowledge_alert"]
+        call = MagicMock()
+        call.data = {"excursion_id": "exc-123"}
+
+        # Should not raise, just log warning and return
+        await handler(call)

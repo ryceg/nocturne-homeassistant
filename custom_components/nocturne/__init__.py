@@ -69,6 +69,12 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
     }
 )
 
+ACKNOWLEDGE_ALERT_SCHEMA = vol.Schema(
+    {
+        vol.Required("excursion_id"): str,
+    }
+)
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Set up Nocturne from a config entry."""
@@ -118,7 +124,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) ->
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.data[DOMAIN]:
-            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity"):
+            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity", "acknowledge_alert"):
                 hass.services.async_remove(DOMAIN, service)
     return unload_ok
 
@@ -185,4 +191,29 @@ def _register_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, "log_activity", handle_log_activity, schema=LOG_ACTIVITY_SCHEMA
+    )
+
+    async def handle_acknowledge_alert(call: ServiceCall) -> None:
+        excursion_id = call.data["excursion_id"]
+        signalr_client = hass.data.get(DOMAIN, {}).get("signalr_client")
+        if signalr_client is None or not signalr_client.connected:
+            _LOGGER.warning(
+                "Cannot acknowledge alert: SignalR client is not connected"
+            )
+            return
+        # Derive instance name from the first config entry's client_id
+        entry_id = next(iter(
+            eid for eid in hass.data[DOMAIN] if eid != "signalr_client"
+        ))
+        entry_data = hass.config_entries.async_get_entry(entry_id)
+        instance_name = entry_data.data.get(CONF_CLIENT_ID, "unknown")
+        await signalr_client.acknowledge(
+            excursion_id, f"homeassistant:{instance_name}"
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        "acknowledge_alert",
+        handle_acknowledge_alert,
+        schema=ACKNOWLEDGE_ALERT_SCHEMA,
     )
