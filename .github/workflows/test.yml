@@ -24,6 +24,6 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install pytest pytest-asyncio pytest-homeassistant-custom-component
-          pip install nocturne-py==0.1.3 pysignalr>=1.3.0
+          pip install nocturne-py==0.1.4 pysignalr>=1.3.0
           pip install -e .
       - run: pytest -v

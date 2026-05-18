@@ -6,6 +6,6 @@
   "dependencies": [],
   "documentation": "https://github.com/ryceg/nocturne-homeassistant",
   "iot_class": "cloud_push",
-  "requirements": ["nocturne-py==0.1.3", "pysignalr>=1.3.0"],
+  "requirements": ["nocturne-py==0.1.4", "pysignalr>=1.3.0"],
   "version": "0.1.4"
 }
