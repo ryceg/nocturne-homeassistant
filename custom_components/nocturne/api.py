@@ -53,6 +53,7 @@ class NocturneApiClient:
         self._config = Configuration(host=base_url.rstrip("/"))
         self._oauth_session = oauth_session
         self._static_token = access_token
+        self._warned_missing_reports_scope = False
 
     async def _ensure_token(self) -> None:
         """Refresh the OAuth token and update the SDK configuration."""
@@ -163,7 +164,12 @@ class NocturneApiClient:
                     resp = api.data_overview_get_daily_summary(year=year)
                 except ApiException as err:
                     if err.status == 403:
-                        _LOGGER.debug("Daily summary needs the reports.read scope")
+                        if not self._warned_missing_reports_scope:
+                            self._warned_missing_reports_scope = True
+                            _LOGGER.warning(
+                                "Time in range needs the reports.read scope; "
+                                "reauthenticate the Nocturne integration to enable it"
+                            )
                         return None
                     raise
                 if resp.days:
