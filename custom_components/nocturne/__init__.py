@@ -120,12 +120,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     alert_handler = NocturneAlertHandler(hass, notify_services, instance_name)
 
     async def _on_glucose_reading(data: dict) -> None:
-        glucose_coordinator.push_glucose_data(data)
-        glucose_coordinator.signalr_active = True
+        await glucose_coordinator.async_handle_glucose_push()
 
     async def _on_disconnected() -> None:
-        glucose_coordinator.signalr_active = False
-        _LOGGER.info("SignalR disconnected, resuming polling")
+        _LOGGER.info("SignalR disconnected")
 
     async def _get_fresh_token() -> str:
         return entry.data["token"]["access_token"]

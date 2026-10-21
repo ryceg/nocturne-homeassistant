@@ -51,13 +51,6 @@ SAMPLE_ALERT_ACKNOWLEDGED = {
     "acknowledgedAt": "2026-05-14T12:15:00Z",
 }
 
-SAMPLE_GLUCOSE_READING = {
-    "mgdl": 120,
-    "direction": "Flat",
-    "mills": 1700000000000,
-}
-
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -237,7 +230,7 @@ class TestAlertAcknowledgedFlow:
 # ---------------------------------------------------------------------------
 
 class TestGlucosePushFlow:
-    """Simulate glucose_reading via coordinator push and verify data updated."""
+    """Simulate glucose_reading via coordinator push and verify it triggers a poll."""
 
     @pytest.fixture(autouse=True)
     def _patch_frame_report(self, monkeypatch):
@@ -247,37 +240,14 @@ class TestGlucosePushFlow:
         )
 
     @pytest.mark.asyncio
-    async def test_push_glucose_data_updates_coordinator(self, mock_hass):
+    async def test_glucose_push_triggers_refresh(self, mock_hass):
         client = AsyncMock()
         coordinator = GlucoseCoordinator(hass=mock_hass, client=client)
-        # async_set_updated_data requires the coordinator to be set up
-        coordinator.async_set_updated_data = MagicMock()
+        coordinator.async_request_refresh = AsyncMock()
 
-        coordinator.push_glucose_data(SAMPLE_GLUCOSE_READING)
+        await coordinator.async_handle_glucose_push()
 
-        coordinator.async_set_updated_data.assert_called_once_with(SAMPLE_GLUCOSE_READING)
-
-    @pytest.mark.asyncio
-    async def test_signalr_active_flag(self, mock_hass):
-        client = AsyncMock()
-        coordinator = GlucoseCoordinator(hass=mock_hass, client=client)
-
-        assert coordinator.signalr_active is False
-        coordinator.signalr_active = True
-        assert coordinator.signalr_active is True
-
-    @pytest.mark.asyncio
-    async def test_signalr_active_skips_api_poll(self, mock_hass):
-        """When signalr_active is True, _async_update_data returns existing data."""
-        client = AsyncMock()
-        coordinator = GlucoseCoordinator(hass=mock_hass, client=client)
-        coordinator._signalr_active = True
-        coordinator.data = {"glucose": "existing"}
-
-        result = await coordinator._async_update_data()
-
-        assert result == {"glucose": "existing"}
-        client.get_latest_glucose.assert_not_called()
+        coordinator.async_request_refresh.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
