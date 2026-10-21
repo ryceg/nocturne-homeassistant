@@ -45,7 +45,7 @@ class TestValidateConnection:
             "custom_components.nocturne.api.ApiClient"
         ) as mock_client_cls:
             ctx = MagicMock()
-            ctx.__enter__ = MagicMock(side_effect=Exception("Connection refused"))
+            ctx.__enter__ = MagicMock(side_effect=ConnectionRefusedError("Connection refused"))
             ctx.__exit__ = MagicMock(return_value=False)
             mock_client_cls.return_value = ctx
             assert await client.validate_connection() is False
