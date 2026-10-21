@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable, Coroutine
+from collections.abc import Callable, Coroutine
+from typing import Any
 
-from pysignalr.client import SignalRClient
+from aiohttp import ClientError
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from pysignalr.client import SignalRClient
 
 from .const import SIGNALR_HUB_PATH
 
@@ -91,7 +94,7 @@ class NocturneSignalRClient:
         if self._async_get_token:
             try:
                 self._access_token = await self._async_get_token()
-            except Exception:
+            except (KeyError, ClientError, HomeAssistantError):
                 _LOGGER.warning("Failed to refresh token before subscribe")
         self._connected = True
         _LOGGER.info("SignalR connected, subscribing as instance %s", self._instance_id)

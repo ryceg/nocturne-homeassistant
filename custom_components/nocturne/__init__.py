@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -19,8 +20,6 @@ from nocturne_py import (
     CreateStateSpanRequest,
     StateSpanCategory,
 )
-
-from datetime import datetime, timezone
 
 from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
@@ -215,7 +214,7 @@ def _register_services(hass: HomeAssistant, entry: NocturneConfigEntry | None = 
 
     async def handle_log_activity(call: ServiceCall) -> None:
         client = _get_client(hass)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         start_mills = int(now.timestamp() * 1000)
         duration_mins = call.data["duration"]
         end_mills = start_mills + (duration_mins * 60 * 1000)

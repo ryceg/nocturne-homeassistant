@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
 
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
@@ -36,7 +35,9 @@ from nocturne_py import (
     UploaderSnapshotApi,
     UpsertSensorGlucoseRequest,
 )
+from nocturne_py.exceptions import OpenApiException
 from nocturne_py.models import DailySummaryDay, ProfileSummary
+from urllib3.exceptions import HTTPError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ class NocturneApiClient:
                     return resp.status is not None
 
             return await asyncio.to_thread(_call)
-        except Exception:
+        except (OpenApiException, HTTPError, OSError):
             return False
 
     async def get_latest_glucose(self) -> SensorGlucose | None:
