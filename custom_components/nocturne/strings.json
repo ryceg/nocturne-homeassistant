@@ -7,13 +7,19 @@
         "data": {
           "instance_url": "Instance URL"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate Nocturne",
+        "description": "Sign in to your Nocturne instance again to renew access for {name}."
       }
     },
     "error": {
       "cannot_connect": "Unable to connect to that Nocturne instance. Check the URL and try again."
     },
     "abort": {
-      "already_configured": "This Nocturne instance is already configured."
+      "already_configured": "This Nocturne instance is already configured.",
+      "reauth_successful": "Reauthentication was successful.",
+      "wrong_instance": "You signed in to a different Nocturne instance than the one this entry uses."
     }
   },
   "options": {

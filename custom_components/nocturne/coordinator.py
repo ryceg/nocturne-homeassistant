@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from http import HTTPStatus
 from typing import Any
 
+from aiohttp import ClientResponseError
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
@@ -20,18 +22,55 @@ from .const import DEVICE_UPDATE_INTERVAL_SECONDS, GLUCOSE_UPDATE_INTERVAL_SECON
 _LOGGER = logging.getLogger(__name__)
 
 
-class GlucoseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator for glucose entries and APS snapshots (60s interval)."""
+class NocturneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+    """Polls Nocturne and maps API and token refresh errors for both coordinators."""
 
-    def __init__(self, hass: HomeAssistant, client: NocturneApiClient) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: NocturneApiClient,
+        name: str,
+        update_interval_seconds: int,
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,
-            name="Nocturne Glucose",
-            update_interval=timedelta(seconds=GLUCOSE_UPDATE_INTERVAL_SECONDS),
+            name=name,
+            update_interval=timedelta(seconds=update_interval_seconds),
         )
         self.client = client
         self._refresh_failed = False
+
+    async def _async_fetch(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            data = await self._async_fetch()
+        except ClientResponseError as err:
+            if 400 <= err.status < 500 and err.status != HTTPStatus.TOO_MANY_REQUESTS:
+                raise ConfigEntryAuthFailed("OAuth token refresh refused") from err
+            raise UpdateFailed(f"Token endpoint error: {err.status}") from err
+        except ApiException as err:
+            if err.status == 401:
+                if self._refresh_failed:
+                    raise ConfigEntryAuthFailed(
+                        "OAuth token expired"
+                    ) from err
+                self._refresh_failed = True
+                raise UpdateFailed("Auth failed, will retry") from err
+            raise UpdateFailed(f"API error: {err.status}") from err
+        except Exception as err:
+            raise UpdateFailed(f"Error fetching data: {err}") from err
+        self._refresh_failed = False
+        return data
+
+
+class GlucoseCoordinator(NocturneCoordinator):
+    """Coordinator for glucose entries and APS snapshots (60s interval)."""
+
+    def __init__(self, hass: HomeAssistant, client: NocturneApiClient) -> None:
+        super().__init__(hass, client, "Nocturne Glucose", GLUCOSE_UPDATE_INTERVAL_SECONDS)
 
     async def async_handle_glucose_push(self) -> None:
         """Refresh now in response to a SignalR glucose_reading.
@@ -41,64 +80,24 @@ class GlucoseCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """
         await self.async_request_refresh()
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            glucose = await self.client.get_latest_glucose()
-            aps = await self.client.get_latest_aps_snapshot()
-            self._refresh_failed = False
-            return {
-                "glucose": glucose,
-                "aps": aps,
-            }
-        except ApiException as err:
-            if err.status == 401:
-                if self._refresh_failed:
-                    raise ConfigEntryAuthFailed(
-                        "OAuth token expired"
-                    ) from err
-                self._refresh_failed = True
-                raise UpdateFailed("Auth failed, will retry") from err
-            raise UpdateFailed(f"API error: {err.status}") from err
-        except Exception as err:
-            raise UpdateFailed(f"Error fetching data: {err}") from err
+    async def _async_fetch(self) -> dict[str, Any]:
+        return {
+            "glucose": await self.client.get_latest_glucose(),
+            "aps": await self.client.get_latest_aps_snapshot(),
+        }
 
 
-class DeviceCoordinator(DataUpdateCoordinator[dict[str, Any]]):
+class DeviceCoordinator(NocturneCoordinator):
     """Coordinator for device status, profile, and reports (5m interval)."""
 
     def __init__(self, hass: HomeAssistant, client: NocturneApiClient) -> None:
-        super().__init__(
-            hass,
-            _LOGGER,
-            name="Nocturne Device",
-            update_interval=timedelta(seconds=DEVICE_UPDATE_INTERVAL_SECONDS),
-        )
-        self.client = client
-        self._refresh_failed = False
+        super().__init__(hass, client, "Nocturne Device", DEVICE_UPDATE_INTERVAL_SECONDS)
 
-    async def _async_update_data(self) -> dict[str, Any]:
-        try:
-            pump = await self.client.get_latest_pump_snapshot()
-            uploader = await self.client.get_latest_uploader_snapshot()
-            profile = await self.client.get_profile_summary()
-            daily_summary = await self.client.get_daily_summary()
-            sensor_age = await self.client.get_sensor_age()
-            self._refresh_failed = False
-            return {
-                "pump": pump,
-                "uploader": uploader,
-                "profile": profile,
-                "daily_summary": daily_summary,
-                "sensor_age": sensor_age,
-            }
-        except ApiException as err:
-            if err.status == 401:
-                if self._refresh_failed:
-                    raise ConfigEntryAuthFailed(
-                        "OAuth token expired"
-                    ) from err
-                self._refresh_failed = True
-                raise UpdateFailed("Auth failed, will retry") from err
-            raise UpdateFailed(f"API error: {err.status}") from err
-        except Exception as err:
-            raise UpdateFailed(f"Error fetching data: {err}") from err
+    async def _async_fetch(self) -> dict[str, Any]:
+        return {
+            "pump": await self.client.get_latest_pump_snapshot(),
+            "uploader": await self.client.get_latest_uploader_snapshot(),
+            "profile": await self.client.get_profile_summary(),
+            "daily_summary": await self.client.get_daily_summary(),
+            "sensor_age": await self.client.get_sensor_age(),
+        }

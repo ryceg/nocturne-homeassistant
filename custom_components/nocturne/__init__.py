@@ -25,11 +25,9 @@ from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
 from .config_flow import NocturneOAuth2Implementation
 from .const import (
-    CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_NOTIFY_SERVICES,
-    CONF_TOKEN_URL,
     DATA_SOURCE_HOME_ASSISTANT,
     DOMAIN,
 )
@@ -85,16 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     # Re-register the OAuth implementation so it survives restarts.
     if CONF_CLIENT_ID in entry.data:
         async_register_implementation(
-            hass,
-            DOMAIN,
-            NocturneOAuth2Implementation(
-                hass,
-                DOMAIN,
-                base_url,
-                entry.data[CONF_AUTHORIZE_URL],
-                entry.data[CONF_TOKEN_URL],
-                entry.data[CONF_CLIENT_ID],
-            ),
+            hass, DOMAIN, NocturneOAuth2Implementation.from_entry_data(hass, entry.data)
         )
 
     implementation = await async_get_config_entry_implementation(hass, entry)
