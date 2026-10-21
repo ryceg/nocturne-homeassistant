@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
     ApiClient,
+    ApiException,
     ApsSnapshot,
     ApsSnapshotApi,
     Bolus,
@@ -52,6 +53,7 @@ class NocturneApiClient:
         self._config = Configuration(host=base_url.rstrip("/"))
         self._oauth_session = oauth_session
         self._static_token = access_token
+        self._warned_missing_reports_scope = False
 
     async def _ensure_token(self) -> None:
         """Refresh the OAuth token and update the SDK configuration."""
@@ -147,14 +149,29 @@ class NocturneApiClient:
         return await asyncio.to_thread(_call)
 
     async def get_daily_summary(self) -> DailySummaryDay | None:
-        """Fetch today's daily summary (time in range, etc.)."""
+        """Fetch today's daily summary (time in range, etc.).
+
+        Returns None when the grant lacks ``reports.read``: entries authorised
+        before that scope was requested keep their other sensors until reauth.
+        """
         await self._ensure_token()
         year = datetime.now().year
 
         def _call() -> DailySummaryDay | None:
             with self._client() as client:
                 api = DataOverviewApi(client)
-                resp = api.data_overview_get_daily_summary(year=year)
+                try:
+                    resp = api.data_overview_get_daily_summary(year=year)
+                except ApiException as err:
+                    if err.status == 403:
+                        if not self._warned_missing_reports_scope:
+                            self._warned_missing_reports_scope = True
+                            _LOGGER.warning(
+                                "Time in range needs the reports.read scope; "
+                                "reauthenticate the Nocturne integration to enable it"
+                            )
+                        return None
+                    raise
                 if resp.days:
                     return resp.days[-1]
                 return None

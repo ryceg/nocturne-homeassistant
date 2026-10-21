@@ -137,10 +137,6 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
 class NocturneOptionsFlowHandler(OptionsFlow):
     """Handle options flow for Nocturne — lets users pick notify services."""
 
-    def __init__(self, config_entry) -> None:
-        """Initialize the options flow."""
-        self.config_entry = config_entry
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -182,7 +178,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry):
         """Return the options flow handler."""
-        return NocturneOptionsFlowHandler(config_entry)
+        return NocturneOptionsFlowHandler()
 
     def __init__(self) -> None:
         super().__init__()

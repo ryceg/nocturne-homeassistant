@@ -18,6 +18,7 @@ DEFAULT_SCOPES = [
     "treatments.readwrite",
     "devices.read",
     "therapy.read",
+    "reports.read",
     "heartrate.readwrite",
     "stepcount.readwrite",
     "alerts.read",
