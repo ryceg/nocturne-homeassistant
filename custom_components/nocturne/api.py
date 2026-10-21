@@ -10,6 +10,7 @@ from typing import Any
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
     ApiClient,
+    ApiException,
     ApsSnapshot,
     ApsSnapshotApi,
     Bolus,
@@ -147,14 +148,24 @@ class NocturneApiClient:
         return await asyncio.to_thread(_call)
 
     async def get_daily_summary(self) -> DailySummaryDay | None:
-        """Fetch today's daily summary (time in range, etc.)."""
+        """Fetch today's daily summary (time in range, etc.).
+
+        Returns None when the grant lacks ``reports.read``: entries authorised
+        before that scope was requested keep their other sensors until reauth.
+        """
         await self._ensure_token()
         year = datetime.now().year
 
         def _call() -> DailySummaryDay | None:
             with self._client() as client:
                 api = DataOverviewApi(client)
-                resp = api.data_overview_get_daily_summary(year=year)
+                try:
+                    resp = api.data_overview_get_daily_summary(year=year)
+                except ApiException as err:
+                    if err.status == 403:
+                        _LOGGER.debug("Daily summary needs the reports.read scope")
+                        return None
+                    raise
                 if resp.days:
                     return resp.days[-1]
                 return None

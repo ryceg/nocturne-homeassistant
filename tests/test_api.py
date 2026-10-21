@@ -65,3 +65,38 @@ class TestEnsureToken:
         await client._ensure_token()
         assert client._config.access_token == "oauth-token"
         oauth_session.async_ensure_token_valid.assert_awaited_once()
+
+
+class TestSdkSendsBearerToken:
+    """Exercises the real SDK request path: the mocks above cannot see auth headers."""
+
+    async def test_authorization_header_reaches_the_wire(self, client):
+        captured: dict = {}
+
+        def _capture(self, method, url, headers=None, body=None, post_params=None,
+                     _request_timeout=None):
+            captured["headers"] = headers
+            raise RuntimeError("stop before network")
+
+        with patch("nocturne_py.rest.RESTClientObject.request", _capture):
+            with pytest.raises(RuntimeError):
+                await client.get_latest_glucose()
+
+        assert captured["headers"]["Authorization"] == "Bearer test-token"
+
+
+class TestGetDailySummaryScope:
+    async def test_forbidden_returns_none(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            mock_api_cls.return_value.data_overview_get_daily_summary.side_effect = (
+                ApiException(status=403, reason="Forbidden")
+            )
+            assert await client.get_daily_summary() is None
+
+    async def test_other_errors_propagate(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            mock_api_cls.return_value.data_overview_get_daily_summary.side_effect = (
+                ApiException(status=500, reason="Server Error")
+            )
+            with pytest.raises(ApiException):
+                await client.get_daily_summary()

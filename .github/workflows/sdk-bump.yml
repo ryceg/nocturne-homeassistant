@@ -32,7 +32,11 @@ jobs:
           import json
           with open('custom_components/nocturne/manifest.json') as f:
               m = json.load(f)
-          m['requirements'] = [f'nocturne-py==${{ steps.version.outputs.version }}']
+          m['requirements'] = [
+              f'nocturne-py==${{ steps.version.outputs.version }}'
+              if r.startswith('nocturne-py') else r
+              for r in m['requirements']
+          ]
           with open('custom_components/nocturne/manifest.json', 'w') as f:
               json.dump(m, f, indent=2)
               f.write('\n')

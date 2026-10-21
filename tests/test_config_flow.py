@@ -6,7 +6,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.nocturne.config_flow import NocturneOAuth2FlowHandler
+from custom_components.nocturne.config_flow import (
+    NocturneOAuth2FlowHandler,
+    NocturneOptionsFlowHandler,
+)
 from custom_components.nocturne.const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
@@ -112,3 +115,10 @@ class TestAsyncOAuthCreateEntry:
         assert data[CONF_CLIENT_ID] == "test-client-id"
         assert data[CONF_AUTHORIZE_URL] == "https://example.com/oauth/authorize"
         assert data[CONF_TOKEN_URL] == "https://example.com/oauth/token"
+
+
+class TestOptionsFlow:
+    def test_get_options_flow_does_not_assign_config_entry(self):
+        handler = NocturneOAuth2FlowHandler.async_get_options_flow(MagicMock())
+
+        assert isinstance(handler, NocturneOptionsFlowHandler)

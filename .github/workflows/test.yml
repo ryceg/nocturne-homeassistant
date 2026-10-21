@@ -24,5 +24,6 @@ jobs:
           python-version: "3.12"
       - run: |
           pip install pytest pytest-asyncio pytest-homeassistant-custom-component
+          pip install $(python -c "import json; print(' '.join(json.load(open('custom_components/nocturne/manifest.json'))['requirements']))")
           pip install -e .
       - run: pytest -v
