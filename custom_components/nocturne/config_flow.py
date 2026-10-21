@@ -6,11 +6,12 @@ import base64
 import hashlib
 import logging
 import secrets
+from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
 from aiohttp import ClientSession
-from homeassistant.config_entries import ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlow
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -64,6 +65,20 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
         self._token_url = token_url
         self._client_id = client_id
         self._code_verifier: str | None = None
+
+    @classmethod
+    def from_entry_data(
+        cls, hass: HomeAssistant, data: Mapping[str, Any]
+    ) -> NocturneOAuth2Implementation:
+        """Build the implementation from a config entry's stored client and URLs."""
+        return cls(
+            hass,
+            DOMAIN,
+            data[CONF_INSTANCE_URL],
+            data[CONF_AUTHORIZE_URL],
+            data[CONF_TOKEN_URL],
+            data[CONF_CLIENT_ID],
+        )
 
     @property
     def name(self) -> str:
@@ -131,7 +146,7 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
             },
         )
         resp.raise_for_status()
-        return await resp.json()
+        return {**token, **await resp.json()}
 
 
 class NocturneOptionsFlowHandler(OptionsFlow):
@@ -282,16 +297,32 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         )
 
     async def async_step_reauth(
-        self, entry_data: dict[str, Any]
+        self, entry_data: Mapping[str, Any]
     ) -> ConfigFlowResult:
         """Handle reauthentication."""
-        self._instance_url = entry_data.get(CONF_INSTANCE_URL)
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Confirm reauthentication, then authorise against the entry's own client."""
+        if user_input is None:
+            return self.async_show_form(step_id="reauth_confirm")
+        entry_data = self._get_reauth_entry().data
+        self._instance_url = entry_data[CONF_INSTANCE_URL]
+        self.flow_impl = NocturneOAuth2Implementation.from_entry_data(self.hass, entry_data)
         return await self.async_step_auth()
 
     async def async_oauth_create_entry(
         self, data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Create the config entry after OAuth completes."""
+        if self.source == SOURCE_REAUTH:
+            await self.async_set_unique_id(self._instance_url)
+            self._abort_if_unique_id_mismatch(reason="wrong_instance")
+            return self.async_update_reload_and_abort(
+                self._get_reauth_entry(), data_updates=data
+            )
         data[CONF_INSTANCE_URL] = self._instance_url
         data[CONF_CLIENT_ID] = self._client_id
         data[CONF_AUTHORIZE_URL] = self._authorize_url

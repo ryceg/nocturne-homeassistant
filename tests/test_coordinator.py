@@ -2,18 +2,33 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from aiohttp import ClientConnectionError, ClientResponseError
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
 from nocturne_py import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
 from nocturne_py.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
+from custom_components.nocturne.const import (
+    CONF_AUTHORIZE_URL,
+    CONF_CLIENT_ID,
+    CONF_INSTANCE_URL,
+    CONF_TOKEN_URL,
+    DOMAIN,
+)
 from custom_components.nocturne.coordinator import (
     DeviceCoordinator,
     GlucoseCoordinator,
 )
+
+TOKEN_URL = "https://nocturne.example.com/oauth/token"
 
 
 @pytest.fixture(autouse=True)
@@ -139,3 +154,65 @@ class TestDeviceCoordinator:
         coord = DeviceCoordinator(mock_hass, mock_client)
         with pytest.raises(UpdateFailed, match="Error fetching data"):
             await coord._async_update_data()
+
+
+def _refresh_error(status: int) -> ClientResponseError:
+    return ClientResponseError(MagicMock(), (), status=status)
+
+
+@pytest.mark.parametrize("coordinator_cls", [GlucoseCoordinator, DeviceCoordinator])
+class TestRefusedTokenRefresh:
+    @pytest.mark.parametrize("status", [400, 401, 403])
+    async def test_refused_refresh_raises_auth_failed(
+        self, mock_hass, mock_client, coordinator_cls, status
+    ):
+        mock_client.get_latest_glucose.side_effect = _refresh_error(status)
+        mock_client.get_latest_pump_snapshot.side_effect = _refresh_error(status)
+        coord = coordinator_cls(mock_hass, mock_client)
+        with pytest.raises(ConfigEntryAuthFailed):
+            await coord._async_update_data()
+
+    @pytest.mark.parametrize(
+        "error",
+        [_refresh_error(429), _refresh_error(500), _refresh_error(503), ClientConnectionError()],
+    )
+    async def test_server_and_network_errors_stay_retryable(
+        self, mock_hass, mock_client, coordinator_cls, error
+    ):
+        mock_client.get_latest_glucose.side_effect = error
+        mock_client.get_latest_pump_snapshot.side_effect = error
+        coord = coordinator_cls(mock_hass, mock_client)
+        with pytest.raises(UpdateFailed):
+            await coord._async_update_data()
+
+
+async def test_refused_refresh_at_setup_starts_reauth(
+    hass: HomeAssistant, enable_custom_integrations: None, aioclient_mock: AiohttpClientMocker
+):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="https://nocturne.example.com",
+        data={
+            "auth_implementation": DOMAIN,
+            "token": {
+                "access_token": "old-access",
+                "refresh_token": "revoked",
+                "expires_at": time.time() - 10,
+                "expires_in": 3600,
+            },
+            CONF_INSTANCE_URL: "https://nocturne.example.com",
+            CONF_CLIENT_ID: "client-id",
+            CONF_AUTHORIZE_URL: "https://nocturne.example.com/oauth/authorize",
+            CONF_TOKEN_URL: TOKEN_URL,
+        },
+    )
+    entry.add_to_hass(hass)
+    aioclient_mock.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
+
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+    assert flows[0]["context"]["entry_id"] == entry.entry_id
