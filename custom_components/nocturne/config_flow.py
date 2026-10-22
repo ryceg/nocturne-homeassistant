@@ -8,7 +8,7 @@ from typing import Any
 
 import voluptuous as vol
 from aiohttp import ClientSession
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -95,8 +95,8 @@ class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
         return self._redirect_uri or _external_callback_uri(self.hass)
 
 
-class NocturneOptionsFlowHandler(OptionsFlow):
-    """Handle options flow for Nocturne — lets users pick notify services."""
+class NocturneOptionsFlowHandler(OptionsFlowWithReload):
+    """Handle options flow for Nocturne: lets users pick notify services."""
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None

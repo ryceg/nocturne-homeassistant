@@ -3,24 +3,18 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
 
-import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
     async_register_implementation,
 )
-from nocturne_py import (
-    CreateBolusRequest,
-    CreateCarbIntakeRequest,
-    CreateStateSpanRequest,
-    StateSpanCategory,
-)
+from homeassistant.helpers.typing import ConfigType
 
 from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
@@ -29,53 +23,39 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_NOTIFY_SERVICES,
-    DATA_SOURCE_HOME_ASSISTANT,
     DOMAIN,
     missing_scopes,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
-from .signalr import NOT_CONNECTED_MESSAGE, NocturneSignalRClient, TokenProvider
+from .services import async_setup_services
+from .signalr import NocturneSignalRClient, TokenProvider
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR]
 
-type NocturneConfigEntry = ConfigEntry
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
-LOG_CARBS_SCHEMA = vol.Schema(
-    {
-        vol.Required("carbs"): vol.Coerce(float),
-        vol.Optional("notes", default=""): str,
-    }
-)
 
-LOG_INSULIN_SCHEMA = vol.Schema(
-    {
-        vol.Required("insulin"): vol.Coerce(float),
-        vol.Optional("notes", default=""): str,
-    }
-)
+@dataclass
+class NocturneData:
+    """Runtime state for one loaded Nocturne entry."""
 
-LOG_GLUCOSE_SCHEMA = vol.Schema(
-    {
-        vol.Required("value"): vol.Coerce(float),
-        vol.Optional("type", default="sgv"): vol.In(["sgv", "mbg"]),
-    }
-)
+    client: NocturneApiClient
+    glucose_coordinator: GlucoseCoordinator
+    device_coordinator: DeviceCoordinator
+    signalr_client: NocturneSignalRClient
+    alert_handler: NocturneAlertHandler
+    instance_name: str
 
-LOG_ACTIVITY_SCHEMA = vol.Schema(
-    {
-        vol.Required("duration"): vol.Coerce(int),
-        vol.Optional("activity_type", default=""): str,
-        vol.Optional("notes", default=""): str,
-    }
-)
 
-ACKNOWLEDGE_ALERT_SCHEMA = vol.Schema(
-    {
-        vol.Required("excursion_id"): str,
-    }
-)
+type NocturneConfigEntry = ConfigEntry[NocturneData]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the Nocturne services once for every entry."""
+    async_setup_services(hass)
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
@@ -93,19 +73,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
 
     client = NocturneApiClient(base_url, oauth_session=oauth_session)
 
-    glucose_coordinator = GlucoseCoordinator(hass, client)
-    device_coordinator = DeviceCoordinator(hass, client)
+    glucose_coordinator = GlucoseCoordinator(hass, entry, client)
+    device_coordinator = DeviceCoordinator(hass, entry, client)
 
     await glucose_coordinator.async_config_entry_first_refresh()
     await device_coordinator.async_config_entry_first_refresh()
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "client": client,
-        "glucose_coordinator": glucose_coordinator,
-        "device_coordinator": device_coordinator,
-    }
-
-    # Set up alert handler and SignalR client
     notify_services: list[str] = entry.options.get(CONF_NOTIFY_SERVICES, [])
     instance_name = entry.data.get(CONF_CLIENT_ID, "unknown")
     alert_handler = NocturneAlertHandler(hass, notify_services, instance_name)
@@ -128,14 +101,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
         on_disconnected=_on_disconnected,
     )
 
-    hass.data[DOMAIN][entry.entry_id]["signalr_client"] = signalr_client
-    hass.data[DOMAIN][entry.entry_id]["instance_name"] = instance_name
+    entry.runtime_data = NocturneData(
+        client=client,
+        glucose_coordinator=glucose_coordinator,
+        device_coordinator=device_coordinator,
+        signalr_client=signalr_client,
+        alert_handler=alert_handler,
+        instance_name=instance_name,
+    )
 
     signalr_client.start(entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    _register_services(hass, entry)
 
     if missing := missing_scopes(entry.data):
         _LOGGER.info(
@@ -158,98 +135,6 @@ def _access_token_provider(oauth_session: OAuth2Session) -> TokenProvider:
 
 async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:
     """Unload a config entry."""
-    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
-    signalr_client = entry_data.get("signalr_client")
-    if signalr_client:
-        await signalr_client.stop()
-
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
-        hass.data[DOMAIN].pop(entry.entry_id)
-        if not hass.data[DOMAIN]:
-            for service in ("log_carbs", "log_insulin", "log_glucose", "log_activity", "acknowledge_alert"):
-                hass.services.async_remove(DOMAIN, service)
+        await entry.runtime_data.signalr_client.stop()
     return unload_ok
-
-
-def _get_client(hass: HomeAssistant) -> NocturneApiClient:
-    """Get the API client from the first config entry."""
-    entry_id = next(iter(hass.data[DOMAIN]))
-    return hass.data[DOMAIN][entry_id]["client"]
-
-
-def _register_services(hass: HomeAssistant, entry: NocturneConfigEntry | None = None) -> None:
-    """Register HA services for writing data to Nocturne."""
-    if hass.services.has_service(DOMAIN, "log_carbs"):
-        return
-
-    async def handle_log_carbs(call: ServiceCall) -> None:
-        client = _get_client(hass)
-        await client.create_carb_intake(
-            CreateCarbIntakeRequest(
-                carbs=call.data["carbs"],
-                data_source=DATA_SOURCE_HOME_ASSISTANT,
-            )
-        )
-
-    async def handle_log_insulin(call: ServiceCall) -> None:
-        client = _get_client(hass)
-        await client.create_bolus(
-            CreateBolusRequest(
-                insulin=call.data["insulin"],
-                data_source=DATA_SOURCE_HOME_ASSISTANT,
-            )
-        )
-
-    async def handle_log_glucose(call: ServiceCall) -> None:
-        client = _get_client(hass)
-        await client.create_glucose(
-            mgdl=call.data["value"],
-            data_source=DATA_SOURCE_HOME_ASSISTANT,
-        )
-
-    async def handle_log_activity(call: ServiceCall) -> None:
-        client = _get_client(hass)
-        now = datetime.now(UTC)
-        start_mills = int(now.timestamp() * 1000)
-        duration_mins = call.data["duration"]
-        end_mills = start_mills + (duration_mins * 60 * 1000)
-        await client.create_state_span(
-            CreateStateSpanRequest(
-                category=StateSpanCategory.EXERCISE,
-                start_mills=start_mills,
-                end_mills=end_mills,
-                source=DATA_SOURCE_HOME_ASSISTANT,
-            )
-        )
-
-    hass.services.async_register(
-        DOMAIN, "log_carbs", handle_log_carbs, schema=LOG_CARBS_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, "log_insulin", handle_log_insulin, schema=LOG_INSULIN_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, "log_glucose", handle_log_glucose, schema=LOG_GLUCOSE_SCHEMA
-    )
-    hass.services.async_register(
-        DOMAIN, "log_activity", handle_log_activity, schema=LOG_ACTIVITY_SCHEMA
-    )
-
-    # Capture at registration time, not at call time
-    captured_entry_id = entry.entry_id if entry is not None else None
-    captured_instance_name = entry.data.get(CONF_CLIENT_ID, "unknown") if entry is not None else "unknown"
-
-    async def handle_acknowledge_alert(call: ServiceCall) -> None:
-        excursion_id = call.data["excursion_id"]
-        signalr_client = hass.data[DOMAIN].get(captured_entry_id, {}).get("signalr_client")
-        if signalr_client is None:
-            raise HomeAssistantError(NOT_CONNECTED_MESSAGE)
-        await signalr_client.acknowledge(excursion_id, f"homeassistant:{captured_instance_name}")
-
-    if not hass.services.has_service(DOMAIN, "acknowledge_alert"):
-        hass.services.async_register(
-            DOMAIN,
-            "acknowledge_alert",
-            handle_acknowledge_alert,
-            schema=ACKNOWLEDGE_ALERT_SCHEMA,
-        )

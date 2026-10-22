@@ -8,6 +8,7 @@ from http import HTTPStatus
 from typing import Any
 
 from aiohttp import ClientResponseError
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import (
@@ -29,6 +30,7 @@ class NocturneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(
         self,
         hass: HomeAssistant,
+        config_entry: ConfigEntry,
         client: NocturneApiClient,
         name: str,
         update_interval_seconds: int,
@@ -36,6 +38,7 @@ class NocturneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name=name,
             update_interval=timedelta(seconds=update_interval_seconds),
         )
@@ -70,8 +73,12 @@ class NocturneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 class GlucoseCoordinator(NocturneCoordinator):
     """Coordinator for glucose entries and APS snapshots (60s interval)."""
 
-    def __init__(self, hass: HomeAssistant, client: NocturneApiClient) -> None:
-        super().__init__(hass, client, "Nocturne Glucose", GLUCOSE_UPDATE_INTERVAL_SECONDS)
+    def __init__(
+        self, hass: HomeAssistant, config_entry: ConfigEntry, client: NocturneApiClient
+    ) -> None:
+        super().__init__(
+            hass, config_entry, client, "Nocturne Glucose", GLUCOSE_UPDATE_INTERVAL_SECONDS
+        )
 
     async def async_handle_glucose_push(self) -> None:
         """Refresh now in response to a SignalR glucose_reading.
@@ -91,8 +98,12 @@ class GlucoseCoordinator(NocturneCoordinator):
 class DeviceCoordinator(NocturneCoordinator):
     """Coordinator for device status, profile, and reports (5m interval)."""
 
-    def __init__(self, hass: HomeAssistant, client: NocturneApiClient) -> None:
-        super().__init__(hass, client, "Nocturne Device", DEVICE_UPDATE_INTERVAL_SECONDS)
+    def __init__(
+        self, hass: HomeAssistant, config_entry: ConfigEntry, client: NocturneApiClient
+    ) -> None:
+        super().__init__(
+            hass, config_entry, client, "Nocturne Device", DEVICE_UPDATE_INTERVAL_SECONDS
+        )
 
     async def _async_fetch(self) -> dict[str, Any]:
         return {

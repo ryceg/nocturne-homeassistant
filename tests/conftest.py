@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
+from dataclasses import dataclass, field
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -98,20 +100,7 @@ def glucose_data() -> dict:
     }
 
 
-@pytest.fixture
-def device_data() -> dict:
-    """Realistic device coordinator data using SDK models."""
-    return {
-        "pump": PumpSnapshot(reservoir=150.0, battery_percent=80),
-        "uploader": UploaderSnapshot(battery=90),
-        "profile": ProfileSummary(),
-        "daily_summary": DailySummaryDay(time_in_range_percent=72.5),
-        "sensor_age": DeviceAgeInfo(days=5),
-    }
-
-
-@pytest.fixture
-def mock_api_client() -> AsyncMock:
+def make_api_client() -> AsyncMock:
     """AsyncMock of NocturneApiClient with sensible defaults."""
     client = AsyncMock()
     client.validate_connection.return_value = True
@@ -134,15 +123,47 @@ def mock_api_client() -> AsyncMock:
 
 
 @pytest.fixture
-def mock_config_entry() -> MagicMock:
-    """MockConfigEntry with OAuth token and instance URL."""
-    entry = MagicMock()
-    entry.entry_id = "test_entry_id"
-    entry.data = {
-        "token": {"access_token": "fake-token"},
-        "instance_url": "https://nocturne.example.com",
-    }
-    return entry
+def mock_api_client() -> AsyncMock:
+    return make_api_client()
+
+
+@dataclass
+class Stubs:
+    """The API and SignalR clients each set-up entry was given, keyed by instance URL."""
+
+    clients: dict[str, AsyncMock] = field(default_factory=dict)
+    signalr: dict[str, MagicMock] = field(default_factory=dict)
+
+
+@pytest.fixture
+def stubs(reauth_hass: HomeAssistant) -> Stubs:
+    """Let the real setup run with a fresh stubbed API and SignalR client per entry."""
+    created = Stubs()
+
+    def api_client(base_url: str, **_: object) -> AsyncMock:
+        return created.clients.setdefault(base_url, make_api_client())
+
+    def signalr_client(*, instance_url: str, **_: object) -> MagicMock:
+        client = MagicMock()
+        client.stop = AsyncMock()
+        client.acknowledge = AsyncMock()
+        created.signalr[instance_url] = client
+        return client
+
+    with (
+        patch("custom_components.nocturne.NocturneApiClient", side_effect=api_client),
+        patch("custom_components.nocturne.NocturneSignalRClient", side_effect=signalr_client),
+    ):
+        yield created
+
+
+async def set_up(hass: HomeAssistant, *entries: MockConfigEntry) -> None:
+    """Add the entries and set the integration up, which loads every one of them."""
+    for entry in entries:
+        entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entries[0].entry_id)
+    await hass.async_block_till_done()
+    assert [entry.state for entry in entries] == [ConfigEntryState.LOADED] * len(entries)
 
 
 @pytest.fixture
@@ -152,33 +173,6 @@ def mock_glucose_coordinator(glucose_data: dict) -> MagicMock:
     coordinator.data = glucose_data
     coordinator.last_update_success = True
     return coordinator
-
-
-@pytest.fixture
-def mock_device_coordinator(device_data: dict) -> MagicMock:
-    """MagicMock device coordinator with fixture data."""
-    coordinator = MagicMock()
-    coordinator.data = device_data
-    coordinator.last_update_success = True
-    return coordinator
-
-
-@pytest.fixture
-def mock_hass(
-    mock_config_entry, mock_api_client, mock_glucose_coordinator, mock_device_coordinator
-) -> MagicMock:
-    """MagicMock HomeAssistant with data populated."""
-    hass = MagicMock()
-    hass.data = {
-        DOMAIN: {
-            mock_config_entry.entry_id: {
-                "client": mock_api_client,
-                "glucose_coordinator": mock_glucose_coordinator,
-                "device_coordinator": mock_device_coordinator,
-            }
-        }
-    }
-    return hass
 
 
 @pytest.fixture
