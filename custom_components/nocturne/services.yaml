@@ -2,6 +2,12 @@ log_carbs:
   name: Log Carbs
   description: Log a carbohydrate intake to Nocturne.
   fields:
+    config_entry_id:
+      name: Nocturne entry
+      description: The Nocturne entry to use. Needed only when more than one is set up.
+      selector:
+        config_entry:
+          integration: nocturne
     carbs:
       name: Carbs
       description: Amount of carbohydrates in grams.
@@ -21,6 +27,12 @@ log_insulin:
   name: Log Insulin
   description: Log an insulin dose to Nocturne.
   fields:
+    config_entry_id:
+      name: Nocturne entry
+      description: The Nocturne entry to use. Needed only when more than one is set up.
+      selector:
+        config_entry:
+          integration: nocturne
     insulin:
       name: Insulin
       description: Amount of insulin in units.
@@ -41,6 +53,12 @@ log_glucose:
   name: Log Glucose
   description: Log a glucose reading to Nocturne.
   fields:
+    config_entry_id:
+      name: Nocturne entry
+      description: The Nocturne entry to use. Needed only when more than one is set up.
+      selector:
+        config_entry:
+          integration: nocturne
     value:
       name: Value
       description: Glucose value in mg/dL.
@@ -64,6 +82,12 @@ log_activity:
   name: Log Activity
   description: Log physical activity to Nocturne.
   fields:
+    config_entry_id:
+      name: Nocturne entry
+      description: The Nocturne entry to use. Needed only when more than one is set up.
+      selector:
+        config_entry:
+          integration: nocturne
     duration:
       name: Duration
       description: Duration in minutes.
@@ -88,6 +112,12 @@ acknowledge_alert:
   name: Acknowledge Alert
   description: Acknowledge an active Nocturne alert excursion
   fields:
+    config_entry_id:
+      name: Nocturne entry
+      description: The Nocturne entry to use. Needed only when more than one is set up.
+      selector:
+        config_entry:
+          integration: nocturne
     excursion_id:
       name: Excursion ID
       description: The ID of the alert excursion to acknowledge

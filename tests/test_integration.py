@@ -206,17 +206,10 @@ class TestAlertAcknowledgedFlow:
 class TestGlucosePushFlow:
     """Simulate glucose_reading via coordinator push and verify it triggers a poll."""
 
-    @pytest.fixture(autouse=True)
-    def _patch_frame_report(self, monkeypatch):
-        """Prevent HA frame helper from raising during unit tests."""
-        monkeypatch.setattr(
-            "homeassistant.helpers.frame.report_usage", lambda *a, **kw: None
-        )
-
     @pytest.mark.asyncio
     async def test_glucose_push_triggers_refresh(self, mock_hass):
         client = AsyncMock()
-        coordinator = GlucoseCoordinator(hass=mock_hass, client=client)
+        coordinator = GlucoseCoordinator(hass=mock_hass, config_entry=MagicMock(), client=client)
         coordinator.async_request_refresh = AsyncMock()
 
         await coordinator.async_handle_glucose_push()

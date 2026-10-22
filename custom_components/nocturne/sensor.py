@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -14,18 +12,15 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
 )
 
-from .const import DOMAIN, SENSOR_RECHECK_INTERVAL_SECONDS
-
-_LOGGER = logging.getLogger(__name__)
+from . import NocturneConfigEntry
+from .const import DOMAIN
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -179,19 +174,6 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
 ALL_SENSORS = GLUCOSE_SENSORS + DEVICE_SENSORS
 
 
-def determine_available_sensors(
-    glucose_data: dict[str, Any] | None,
-    device_data: dict[str, Any] | None,
-) -> list[NocturneSensorDescription]:
-    """Determine which sensors have data available."""
-    available = []
-    for sensor in ALL_SENSORS:
-        data = glucose_data if sensor.coordinator_key == "glucose" else device_data
-        if data is not None and sensor.available_fn(data):
-            available.append(sensor)
-    return available
-
-
 class NocturneSensor(CoordinatorEntity, SensorEntity):
     """Representation of a Nocturne sensor."""
 
@@ -230,60 +212,18 @@ class NocturneSensor(CoordinatorEntity, SensorEntity):
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    entry: ConfigEntry,
+    entry: NocturneConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Nocturne sensors from a config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    glucose_coordinator = data["glucose_coordinator"]
-    device_coordinator = data["device_coordinator"]
-
-    available = determine_available_sensors(
-        glucose_coordinator.data, device_coordinator.data
-    )
-
-    registered_keys: set[str] = set()
-    entities: list[NocturneSensor] = []
-    for desc in available:
-        coordinator = (
-            glucose_coordinator
+    """Set up every Nocturne sensor; each stays unavailable until its data arrives."""
+    data = entry.runtime_data
+    async_add_entities(
+        NocturneSensor(
+            data.glucose_coordinator
             if desc.coordinator_key == "glucose"
-            else device_coordinator
+            else data.device_coordinator,
+            desc,
+            entry.entry_id,
         )
-        entities.append(NocturneSensor(coordinator, desc, entry.entry_id))
-        registered_keys.add(desc.key)
-
-    async_add_entities(entities)
-
-    async def _recheck_sensors(_now: Any) -> None:
-        """Re-check for newly available sensors (e.g. user started looping)."""
-        now_available = determine_available_sensors(
-            glucose_coordinator.data, device_coordinator.data
-        )
-        new_entities: list[NocturneSensor] = []
-        for desc in now_available:
-            if desc.key not in registered_keys:
-                coordinator = (
-                    glucose_coordinator
-                    if desc.coordinator_key == "glucose"
-                    else device_coordinator
-                )
-                new_entities.append(
-                    NocturneSensor(coordinator, desc, entry.entry_id)
-                )
-                registered_keys.add(desc.key)
-        if new_entities:
-            _LOGGER.info(
-                "Discovered %d new sensor(s): %s",
-                len(new_entities),
-                [e.entity_description.key for e in new_entities],
-            )
-            async_add_entities(new_entities)
-
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            _recheck_sensors,
-            timedelta(seconds=SENSOR_RECHECK_INTERVAL_SECONDS),
-        )
+        for desc in ALL_SENSORS
     )

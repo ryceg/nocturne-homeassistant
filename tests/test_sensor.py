@@ -1,62 +1,14 @@
-"""Tests for sensor platform: determine_available_sensors, NocturneSensor."""
+"""Tests for the sensor platform."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-from nocturne_py import ApsSnapshot, SensorGlucose, GlucoseDirection
+from homeassistant.const import STATE_UNAVAILABLE
+from nocturne_py import ApsSnapshot, PumpSnapshot
 
-from custom_components.nocturne.sensor import (
-    DEVICE_SENSORS,
-    GLUCOSE_SENSORS,
-    NocturneSensor,
-    determine_available_sensors,
-)
+from custom_components.nocturne.sensor import GLUCOSE_SENSORS, NocturneSensor
 
-
-class TestDetermineAvailableSensors:
-    def test_full_data_returns_all_glucose_sensors(self, glucose_data):
-        available = determine_available_sensors(glucose_data, None)
-        glucose_keys = {s.key for s in available}
-        assert "current_glucose" in glucose_keys
-        assert "glucose_trend" in glucose_keys
-        assert "iob" in glucose_keys
-        assert "cob" in glucose_keys
-
-    def test_full_data_returns_all_device_sensors(self, device_data):
-        available = determine_available_sensors(None, device_data)
-        device_keys = {s.key for s in available}
-        assert "pump_reservoir" in device_keys
-        assert "pump_battery" in device_keys
-        assert "time_in_range" in device_keys
-
-    def test_none_glucose_data(self, device_data):
-        available = determine_available_sensors(None, device_data)
-        keys = {s.key for s in available}
-        # No glucose sensors should appear
-        for sensor in GLUCOSE_SENSORS:
-            assert sensor.key not in keys
-
-    def test_none_device_data(self, glucose_data):
-        available = determine_available_sensors(glucose_data, None)
-        keys = {s.key for s in available}
-        for sensor in DEVICE_SENSORS:
-            assert sensor.key not in keys
-
-    def test_both_none_returns_empty(self):
-        assert determine_available_sensors(None, None) == []
-
-    def test_partial_glucose_data(self):
-        # Only glucose, no APS — should get glucose/trend but not iob/cob
-        partial = {
-            "glucose": SensorGlucose(mgdl=100, direction=GlucoseDirection("Flat")),
-            "aps": None,
-        }
-        available = determine_available_sensors(partial, None)
-        keys = {s.key for s in available}
-        assert "current_glucose" in keys
-        assert "iob" not in keys
+from .conftest import make_api_client, make_entry, set_up
 
 
 class TestNocturneSensor:
@@ -89,34 +41,37 @@ class TestNocturneSensor:
 
 
 class TestSensorSetupEntry:
-    async def test_creates_correct_entities(
-        self, mock_hass, mock_config_entry, mock_glucose_coordinator, mock_device_coordinator
-    ):
-        from custom_components.nocturne.sensor import async_setup_entry
+    async def test_every_sensor_exists_and_waits_for_its_data(self, reauth_hass, stubs):
+        entry = make_entry(expires_in=3600)
+        client = make_api_client()
+        client.get_latest_aps_snapshot.return_value = None
+        client.get_latest_pump_snapshot.return_value = None
+        stubs.clients[entry.data["instance_url"]] = client
+        await set_up(reauth_hass, entry)
 
-        added_entities = []
+        def states() -> dict[str, str]:
+            return {state.entity_id: state.state for state in reauth_hass.states.async_all("sensor")}
 
-        async_add_entities = MagicMock(side_effect=lambda entities: added_entities.extend(entities))
+        assert states() == {
+            "sensor.nocturne_current_glucose": "120",
+            "sensor.nocturne_glucose_trend": "Flat",
+            "sensor.nocturne_insulin_on_board": STATE_UNAVAILABLE,
+            "sensor.nocturne_carbs_on_board": STATE_UNAVAILABLE,
+            "sensor.nocturne_predicted_bg": STATE_UNAVAILABLE,
+            "sensor.nocturne_loop_status": STATE_UNAVAILABLE,
+            "sensor.nocturne_active_basal_rate": STATE_UNAVAILABLE,
+            "sensor.nocturne_pump_reservoir": STATE_UNAVAILABLE,
+            "sensor.nocturne_pump_battery": STATE_UNAVAILABLE,
+            "sensor.nocturne_cgm_battery": "90",
+            "sensor.nocturne_sensor_age": "5",
+            "sensor.nocturne_time_in_range": "72.5",
+        }
 
-        await async_setup_entry(mock_hass, mock_config_entry, async_add_entities)
+        client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=2.5)
+        client.get_latest_pump_snapshot.return_value = PumpSnapshot(reservoir=90.0)
+        await entry.runtime_data.glucose_coordinator.async_refresh()
+        await entry.runtime_data.device_coordinator.async_refresh()
+        await reauth_hass.async_block_till_done()
 
-        assert len(added_entities) > 0
-        # All created entities should be NocturneSensor instances
-        for entity in added_entities:
-            assert isinstance(entity, NocturneSensor)
-
-    async def test_assigns_correct_coordinators(
-        self, mock_hass, mock_config_entry, mock_glucose_coordinator, mock_device_coordinator
-    ):
-        from custom_components.nocturne.sensor import async_setup_entry
-
-        added_entities = []
-        async_add_entities = MagicMock(side_effect=lambda entities: added_entities.extend(entities))
-
-        await async_setup_entry(mock_hass, mock_config_entry, async_add_entities)
-
-        for entity in added_entities:
-            if entity.entity_description.coordinator_key == "glucose":
-                assert entity.coordinator is mock_glucose_coordinator
-            else:
-                assert entity.coordinator is mock_device_coordinator
+        assert states()["sensor.nocturne_insulin_on_board"] == "2.5"
+        assert states()["sensor.nocturne_pump_reservoir"] == "90.0"

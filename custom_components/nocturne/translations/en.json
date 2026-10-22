@@ -36,15 +36,109 @@
     }
   },
   "services": {
+    "log_carbs": {
+      "name": "Log Carbs",
+      "description": "Log a carbohydrate intake to Nocturne.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Nocturne entry",
+          "description": "The Nocturne entry to use. Needed only when more than one is set up."
+        },
+        "carbs": {
+          "name": "Carbs",
+          "description": "Amount of carbohydrates in grams."
+        },
+        "notes": {
+          "name": "Notes",
+          "description": "Optional notes."
+        }
+      }
+    },
+    "log_insulin": {
+      "name": "Log Insulin",
+      "description": "Log an insulin dose to Nocturne.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Nocturne entry",
+          "description": "The Nocturne entry to use. Needed only when more than one is set up."
+        },
+        "insulin": {
+          "name": "Insulin",
+          "description": "Amount of insulin in units."
+        },
+        "notes": {
+          "name": "Notes",
+          "description": "Optional notes."
+        }
+      }
+    },
+    "log_glucose": {
+      "name": "Log Glucose",
+      "description": "Log a glucose reading to Nocturne.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Nocturne entry",
+          "description": "The Nocturne entry to use. Needed only when more than one is set up."
+        },
+        "value": {
+          "name": "Value",
+          "description": "Glucose value in mg/dL."
+        },
+        "type": {
+          "name": "Type",
+          "description": "Type of glucose reading."
+        }
+      }
+    },
+    "log_activity": {
+      "name": "Log Activity",
+      "description": "Log physical activity to Nocturne.",
+      "fields": {
+        "config_entry_id": {
+          "name": "Nocturne entry",
+          "description": "The Nocturne entry to use. Needed only when more than one is set up."
+        },
+        "duration": {
+          "name": "Duration",
+          "description": "Duration in minutes."
+        },
+        "activity_type": {
+          "name": "Activity Type",
+          "description": "Type of activity."
+        },
+        "notes": {
+          "name": "Notes",
+          "description": "Optional notes."
+        }
+      }
+    },
     "acknowledge_alert": {
       "name": "Acknowledge Alert",
       "description": "Acknowledge an active Nocturne alert excursion",
       "fields": {
+        "config_entry_id": {
+          "name": "Nocturne entry",
+          "description": "The Nocturne entry to use. Needed only when more than one is set up."
+        },
         "excursion_id": {
           "name": "Excursion ID",
           "description": "The ID of the alert excursion to acknowledge"
         }
       }
+    }
+  },
+  "exceptions": {
+    "no_loaded_entry": {
+      "message": "No Nocturne entry is loaded."
+    },
+    "entry_required": {
+      "message": "More than one Nocturne entry is loaded. Choose which one to use."
+    },
+    "entry_not_found": {
+      "message": "No Nocturne entry has the ID {entry_id}."
+    },
+    "entry_not_loaded": {
+      "message": "The Nocturne entry {title} is not loaded."
     }
   }
 }

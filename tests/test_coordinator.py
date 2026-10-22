@@ -32,14 +32,6 @@ from custom_components.nocturne.coordinator import (
 TOKEN_URL = "https://nocturne.example.com/oauth/token"
 
 
-@pytest.fixture(autouse=True)
-def _patch_frame_report(monkeypatch):
-    """Prevent HA frame helper from raising during unit tests."""
-    monkeypatch.setattr(
-        "homeassistant.helpers.frame.report_usage", lambda *a, **kw: None
-    )
-
-
 def _make_api_exception(status: int) -> ApiException:
     return ApiException(status=status, reason=f"HTTP {status}")
 
@@ -66,7 +58,7 @@ def mock_hass() -> MagicMock:
 
 class TestGlucoseCoordinator:
     async def test_success(self, mock_hass, mock_client):
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         result = await coord._async_update_data()
         assert result["glucose"].mgdl == 120
         assert result["aps"].iob == 1.5
@@ -74,33 +66,33 @@ class TestGlucoseCoordinator:
 
     async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
         mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="Auth failed"):
             await coord._async_update_data()
         assert coord._refresh_failed is True
 
     async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
         mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         coord._refresh_failed = True
         with pytest.raises(ConfigEntryAuthFailed, match="OAuth token expired"):
             await coord._async_update_data()
 
     async def test_other_http_error_raises_update_failed(self, mock_hass, mock_client):
         mock_client.get_latest_glucose.side_effect = _make_api_exception(500)
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="API error: 500"):
             await coord._async_update_data()
 
     async def test_generic_exception_raises_update_failed(self, mock_hass, mock_client):
         mock_client.get_latest_glucose.side_effect = OSError("DNS failure")
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="Error fetching data"):
             await coord._async_update_data()
 
     async def test_glucose_push_requests_refresh(self, mock_hass, mock_client):
         """A pushed glucose_reading triggers a poll instead of replacing the data."""
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         coord.async_request_refresh = AsyncMock()
 
         await coord.async_handle_glucose_push()
@@ -109,7 +101,7 @@ class TestGlucoseCoordinator:
 
     async def test_polls_after_glucose_push(self, mock_hass, mock_client):
         """Polling is never paused by SignalR: APS state is not pushed."""
-        coord = GlucoseCoordinator(mock_hass, mock_client)
+        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
         coord.async_request_refresh = AsyncMock()
         await coord.async_handle_glucose_push()
 
@@ -124,7 +116,7 @@ class TestGlucoseCoordinator:
 
 class TestDeviceCoordinator:
     async def test_success(self, mock_hass, mock_client):
-        coord = DeviceCoordinator(mock_hass, mock_client)
+        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
         result = await coord._async_update_data()
         assert result["pump"].reservoir == 150.0
         assert result["uploader"].battery == 90
@@ -134,26 +126,26 @@ class TestDeviceCoordinator:
 
     async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
         mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
-        coord = DeviceCoordinator(mock_hass, mock_client)
+        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="Auth failed"):
             await coord._async_update_data()
 
     async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
         mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
-        coord = DeviceCoordinator(mock_hass, mock_client)
+        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
         coord._refresh_failed = True
         with pytest.raises(ConfigEntryAuthFailed):
             await coord._async_update_data()
 
     async def test_other_http_error(self, mock_hass, mock_client):
         mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(503)
-        coord = DeviceCoordinator(mock_hass, mock_client)
+        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="API error: 503"):
             await coord._async_update_data()
 
     async def test_generic_exception(self, mock_hass, mock_client):
         mock_client.get_latest_pump_snapshot.side_effect = RuntimeError("boom")
-        coord = DeviceCoordinator(mock_hass, mock_client)
+        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed, match="Error fetching data"):
             await coord._async_update_data()
 
@@ -170,7 +162,7 @@ class TestRefusedTokenRefresh:
     ):
         mock_client.get_latest_glucose.side_effect = _refresh_error(status)
         mock_client.get_latest_pump_snapshot.side_effect = _refresh_error(status)
-        coord = coordinator_cls(mock_hass, mock_client)
+        coord = coordinator_cls(mock_hass, MagicMock(), mock_client)
         with pytest.raises(ConfigEntryAuthFailed):
             await coord._async_update_data()
 
@@ -183,7 +175,7 @@ class TestRefusedTokenRefresh:
     ):
         mock_client.get_latest_glucose.side_effect = error
         mock_client.get_latest_pump_snapshot.side_effect = error
-        coord = coordinator_cls(mock_hass, mock_client)
+        coord = coordinator_cls(mock_hass, MagicMock(), mock_client)
         with pytest.raises(UpdateFailed):
             await coord._async_update_data()
 
