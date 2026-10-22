@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
+import voluptuous as vol
 from homeassistant.const import ATTR_CONFIG_ENTRY_ID
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -20,6 +23,12 @@ from .conftest import Stubs, make_entry, set_up
 
 FIRST_URL = "https://first.example.com"
 SECOND_URL = "https://second.example.com"
+
+
+def assert_utc_now(timestamp: datetime) -> None:
+    assert timestamp.tzinfo is not None
+    assert timestamp.utcoffset() == timedelta(0)
+    assert abs(datetime.now(UTC) - timestamp) < timedelta(seconds=1)
 
 
 async def _call(hass: HomeAssistant, service: str, data: dict) -> None:
@@ -45,12 +54,17 @@ async def two_entries(
 
 class TestWithOneEntry:
     async def test_log_carbs(self, reauth_hass, stubs, one_entry):
-        await _call(reauth_hass, "log_carbs", {"carbs": 30, "notes": "lunch"})
+        await _call(reauth_hass, "log_carbs", {"carbs": 30})
 
         request = stubs.clients[one_entry.data["instance_url"]].create_carb_intake.call_args[0][0]
         assert isinstance(request, CreateCarbIntakeRequest)
         assert request.carbs == 30.0
         assert request.data_source == DATA_SOURCE_HOME_ASSISTANT
+        assert_utc_now(request.timestamp)
+
+    async def test_log_carbs_refuses_notes_the_server_cannot_store(self, reauth_hass, one_entry):
+        with pytest.raises(vol.Invalid):
+            await _call(reauth_hass, "log_carbs", {"carbs": 30, "notes": "lunch"})
 
     async def test_log_insulin(self, reauth_hass, stubs, one_entry):
         await _call(reauth_hass, "log_insulin", {"insulin": 5})
@@ -59,22 +73,61 @@ class TestWithOneEntry:
         assert isinstance(request, CreateBolusRequest)
         assert request.insulin == 5.0
         assert request.data_source == DATA_SOURCE_HOME_ASSISTANT
+        assert_utc_now(request.timestamp)
 
-    async def test_log_glucose(self, reauth_hass, stubs, one_entry):
-        await _call(reauth_hass, "log_glucose", {"value": 110, "type": "sgv"})
+    async def test_log_insulin_refuses_notes_the_server_cannot_store(self, reauth_hass, one_entry):
+        with pytest.raises(vol.Invalid):
+            await _call(reauth_hass, "log_insulin", {"insulin": 5, "notes": "correction"})
 
-        stubs.clients[one_entry.data["instance_url"]].create_glucose.assert_awaited_once_with(
-            mgdl=110.0, data_source=DATA_SOURCE_HOME_ASSISTANT
-        )
+    @pytest.mark.parametrize("data", [{"value": 110}, {"value": 110, "type": "sgv"}])
+    async def test_log_glucose_sgv_posts_a_sensor_reading(
+        self, reauth_hass, stubs, one_entry, data
+    ):
+        await _call(reauth_hass, "log_glucose", data)
+
+        client = stubs.clients[one_entry.data["instance_url"]]
+        client.create_glucose.assert_awaited_once()
+        kwargs = client.create_glucose.await_args.kwargs
+        assert kwargs.keys() == {"mgdl", "data_source", "timestamp"}
+        assert kwargs["mgdl"] == 110.0
+        assert kwargs["data_source"] == DATA_SOURCE_HOME_ASSISTANT
+        assert_utc_now(kwargs["timestamp"])
+        client.create_meter_glucose.assert_not_awaited()
+
+    async def test_log_glucose_mbg_posts_a_meter_reading(self, reauth_hass, stubs, one_entry):
+        await _call(reauth_hass, "log_glucose", {"value": 110, "type": "mbg"})
+
+        client = stubs.clients[one_entry.data["instance_url"]]
+        client.create_meter_glucose.assert_awaited_once()
+        kwargs = client.create_meter_glucose.await_args.kwargs
+        assert kwargs.keys() == {"mgdl", "data_source", "timestamp"}
+        assert kwargs["mgdl"] == 110.0
+        assert kwargs["data_source"] == DATA_SOURCE_HOME_ASSISTANT
+        assert_utc_now(kwargs["timestamp"])
+        client.create_glucose.assert_not_awaited()
 
     async def test_log_activity(self, reauth_hass, stubs, one_entry):
-        await _call(reauth_hass, "log_activity", {"duration": 30, "activity_type": "walking"})
+        await _call(
+            reauth_hass,
+            "log_activity",
+            {"duration": 30, "activity_type": "walking", "notes": "park loop"},
+        )
 
         request = stubs.clients[one_entry.data["instance_url"]].create_state_span.call_args[0][0]
         assert isinstance(request, CreateStateSpanRequest)
         assert request.category == StateSpanCategory.EXERCISE
+        assert request.state == "walking"
+        assert request.metadata == {"notes": "park loop"}
         assert request.source == DATA_SOURCE_HOME_ASSISTANT
         assert request.end_mills - request.start_mills == 30 * 60 * 1000
+        assert_utc_now(datetime.fromtimestamp(request.start_mills / 1000, UTC))
+
+    async def test_log_activity_without_type_or_notes(self, reauth_hass, stubs, one_entry):
+        await _call(reauth_hass, "log_activity", {"duration": 10})
+
+        request = stubs.clients[one_entry.data["instance_url"]].create_state_span.call_args[0][0]
+        assert request.state == "exercise"
+        assert request.metadata is None
 
     async def test_acknowledge_alert(self, reauth_hass, stubs, one_entry):
         await _call(reauth_hass, "acknowledge_alert", {"excursion_id": "exc-123"})

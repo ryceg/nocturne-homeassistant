@@ -97,10 +97,6 @@
         "carbs": {
           "name": "Carbs",
           "description": "Amount of carbohydrates in grams."
-        },
-        "notes": {
-          "name": "Notes",
-          "description": "Optional notes."
         }
       }
     },
@@ -115,10 +111,6 @@
         "insulin": {
           "name": "Insulin",
           "description": "Amount of insulin in units."
-        },
-        "notes": {
-          "name": "Notes",
-          "description": "Optional notes."
         }
       }
     },

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import date
+from datetime import date, datetime
 
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
@@ -23,6 +23,8 @@ from nocturne_py import (
     DataOverviewApi,
     DeviceAgeApi,
     DeviceAgeInfo,
+    MeterGlucose,
+    MeterGlucoseApi,
     NutritionApi,
     ProfileApi,
     PumpSnapshot,
@@ -34,6 +36,7 @@ from nocturne_py import (
     StatusApi,
     UploaderSnapshot,
     UploaderSnapshotApi,
+    UpsertMeterGlucoseRequest,
     UpsertSensorGlucoseRequest,
 )
 from nocturne_py.exceptions import OpenApiException
@@ -209,7 +212,7 @@ class NocturneApiClient:
         return await asyncio.to_thread(_call)
 
     async def create_glucose(
-        self, mgdl: float, data_source: str = ""
+        self, mgdl: float, timestamp: datetime, data_source: str = ""
     ) -> SensorGlucose | None:
         """Post a sensor glucose reading."""
         await self._ensure_token()
@@ -217,8 +220,26 @@ class NocturneApiClient:
         def _call() -> SensorGlucose | None:
             with self._client() as client:
                 api = SensorGlucoseApi(client)
-                req = UpsertSensorGlucoseRequest(mgdl=mgdl, data_source=data_source)
+                req = UpsertSensorGlucoseRequest(
+                    mgdl=mgdl, timestamp=timestamp, data_source=data_source
+                )
                 return api.sensor_glucose_create(req)
+
+        return await asyncio.to_thread(_call)
+
+    async def create_meter_glucose(
+        self, mgdl: float, timestamp: datetime, data_source: str = ""
+    ) -> MeterGlucose | None:
+        """Post a fingerstick meter glucose reading."""
+        await self._ensure_token()
+
+        def _call() -> MeterGlucose | None:
+            with self._client() as client:
+                api = MeterGlucoseApi(client)
+                req = UpsertMeterGlucoseRequest(
+                    mgdl=mgdl, timestamp=timestamp, data_source=data_source
+                )
+                return api.meter_glucose_create(req)
 
         return await asyncio.to_thread(_call)
 
