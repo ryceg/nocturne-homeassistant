@@ -449,7 +449,11 @@ class TestFullLifecycle:
         )
 
         # Simulate SignalR delivering an alert (wrapped in list as SignalR does)
-        await signalr_client._handle_alert_dispatch([fixtures.alert_dispatch()])
+        handlers = {}
+        stub = MagicMock()
+        stub.on.side_effect = handlers.__setitem__
+        signalr_client._subscribe_events(stub)
+        await handlers["alert_dispatch"]([fixtures.alert_dispatch()])
 
         # Verify the full chain executed
         mock_hass.bus.async_fire.assert_called_once()

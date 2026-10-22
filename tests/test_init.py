@@ -10,7 +10,8 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
-from custom_components.nocturne import _access_token_provider, _display_name
+from custom_components.nocturne import _display_name
+from custom_components.nocturne.auth import oauth_token_provider
 from custom_components.nocturne.const import (
     CONF_CLIENT_ID,
     CONF_NOTIFY_SERVICES,
@@ -74,7 +75,7 @@ class TestTokenRefreshPerEntry:
         assert second.data["token"]["access_token"] == "new-second-client"
 
 
-class TestAccessTokenProvider:
+class TestOauthTokenProvider:
     async def test_each_call_refreshes_and_returns_the_current_token(self):
         oauth_session = MagicMock()
         oauth_session.token = {"access_token": "expired"}
@@ -84,7 +85,7 @@ class TestAccessTokenProvider:
             oauth_session.token = {"access_token": next(refreshed)}
 
         oauth_session.async_ensure_token_valid = AsyncMock(side_effect=_refresh)
-        get_token = _access_token_provider(oauth_session)
+        get_token = oauth_token_provider(oauth_session)
 
         assert await get_token() == "fresh-1"
         assert await get_token() == "fresh-2"

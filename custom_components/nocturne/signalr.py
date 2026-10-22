@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from aiohttp import ClientError
@@ -17,6 +17,7 @@ from pysignalr.exceptions import HubError
 from pysignalr.messages import CompletionMessage
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
+from .auth import TokenProvider
 from .const import SIGNALR_HUB_PATH
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,7 +27,6 @@ ACKNOWLEDGE_TIMEOUT_SECONDS = 10
 ACKNOWLEDGE_SUCCESS_OUTCOMES = frozenset({"acknowledged", "muted"})
 
 AsyncCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
-TokenProvider = Callable[[], Awaitable[str]]
 
 RECONNECT_INITIAL_DELAY = 1.0
 RECONNECT_MAX_DELAY = 300.0
@@ -177,10 +177,7 @@ class NocturneSignalRClient:
             retry_count=1,
             ssl=get_default_context() if self.hub_url.startswith("https://") else None,
         )
-        client.on("glucose_reading", self._handle_glucose_reading)
-        client.on("alert_dispatch", self._handle_alert_dispatch)
-        client.on("alert_resolved", self._handle_alert_resolved)
-        client.on("alert_acknowledged", self._handle_alert_acknowledged)
+        self._subscribe_events(client)
         client.on_open(self._on_connected)
         client.on_close(self._on_disconnected)
         self._client = client
@@ -220,30 +217,22 @@ class NocturneSignalRClient:
         if self._on_disconnected_cb:
             await self._on_disconnected_cb()
 
-    async def _handle_glucose_reading(self, raw: Any) -> None:
-        try:
-            data = raw[0] if isinstance(raw, (list, tuple)) else raw
-            await self._on_glucose_reading(data)
-        except Exception:
-            _LOGGER.exception("Error handling glucose_reading event")
+    def _subscribe_events(self, client: SignalRClient) -> None:
+        for event, callback in (
+            ("glucose_reading", self._on_glucose_reading),
+            ("alert_dispatch", self._on_alert_dispatch),
+            ("alert_resolved", self._on_alert_resolved),
+            ("alert_acknowledged", self._on_alert_acknowledged),
+        ):
+            client.on(event, self._event_handler(event, callback))
 
-    async def _handle_alert_dispatch(self, raw: Any) -> None:
-        try:
-            data = raw[0] if isinstance(raw, (list, tuple)) else raw
-            await self._on_alert_dispatch(data)
-        except Exception:
-            _LOGGER.exception("Error handling alert_dispatch event")
+    @staticmethod
+    def _event_handler(event: str, callback: AsyncCallback) -> Callable[[Any], Coroutine[Any, Any, None]]:
+        async def _handle(raw: Any) -> None:
+            try:
+                data = raw[0] if isinstance(raw, (list, tuple)) else raw
+                await callback(data)
+            except Exception:
+                _LOGGER.exception("Error handling %s event", event)
 
-    async def _handle_alert_resolved(self, raw: Any) -> None:
-        try:
-            data = raw[0] if isinstance(raw, (list, tuple)) else raw
-            await self._on_alert_resolved(data)
-        except Exception:
-            _LOGGER.exception("Error handling alert_resolved event")
-
-    async def _handle_alert_acknowledged(self, raw: Any) -> None:
-        try:
-            data = raw[0] if isinstance(raw, (list, tuple)) else raw
-            await self._on_alert_acknowledged(data)
-        except Exception:
-            _LOGGER.exception("Error handling alert_acknowledged event")
+        return _handle

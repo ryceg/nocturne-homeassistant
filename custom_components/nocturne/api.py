@@ -7,7 +7,6 @@ import logging
 import time
 from datetime import date, datetime
 
-from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
     ApiClient,
     ApiException,
@@ -43,6 +42,8 @@ from nocturne_py.exceptions import OpenApiException
 from nocturne_py.models import DailySummaryDay, ProfileSummary
 from urllib3.exceptions import HTTPError
 
+from .auth import TokenProvider
+
 _LOGGER = logging.getLogger(__name__)
 
 DAILY_SUMMARY_CACHE_SECONDS = 30 * 60
@@ -54,22 +55,17 @@ class NocturneApiClient:
     def __init__(
         self,
         base_url: str,
-        oauth_session: OAuth2Session | None = None,
-        access_token: str = "",
+        token_provider: TokenProvider | None = None,
     ) -> None:
         self._config = Configuration(host=base_url.rstrip("/"))
-        self._oauth_session = oauth_session
-        self._static_token = access_token
+        self._token_provider = token_provider
         self._warned_missing_reports_scope = False
         self._daily_summary_cache: tuple[date, float, DailySummaryDay | None] | None = None
 
     async def _ensure_token(self) -> None:
-        """Refresh the OAuth token and update the SDK configuration."""
-        if self._oauth_session is not None:
-            await self._oauth_session.async_ensure_token_valid()
-            self._config.access_token = self._oauth_session.token["access_token"]
-        else:
-            self._config.access_token = self._static_token
+        """Set the SDK token from the provider before each request."""
+        if self._token_provider is not None:
+            self._config.access_token = await self._token_provider()
 
     def _client(self) -> ApiClient:
         return ApiClient(self._config)

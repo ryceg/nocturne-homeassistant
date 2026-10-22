@@ -20,7 +20,7 @@ from custom_components.nocturne.api import NocturneApiClient
 
 @pytest.fixture
 def client() -> NocturneApiClient:
-    return NocturneApiClient("https://example.com", access_token="test-token")
+    return NocturneApiClient("https://example.com", AsyncMock(return_value="test-token"))
 
 
 class TestValidateConnection:
@@ -53,19 +53,21 @@ class TestValidateConnection:
 
 
 class TestEnsureToken:
-    async def test_uses_static_token(self, client):
+    async def test_uses_provider_token(self, client):
         await client._ensure_token()
         assert client._config.access_token == "test-token"
 
-    async def test_uses_oauth_session(self):
-        oauth_session = AsyncMock()
-        oauth_session.token = {"access_token": "oauth-token"}
-        client = NocturneApiClient(
-            "https://example.com", oauth_session=oauth_session
-        )
+    async def test_asks_the_provider_on_every_request(self):
+        tokens = iter(["first", "second"])
+        client = NocturneApiClient("https://example.com", token_provider=AsyncMock(side_effect=lambda: next(tokens)))
         await client._ensure_token()
-        assert client._config.access_token == "oauth-token"
-        oauth_session.async_ensure_token_valid.assert_awaited_once()
+        await client._ensure_token()
+        assert client._config.access_token == "second"
+
+    async def test_sends_no_token_without_a_provider(self):
+        client = NocturneApiClient("https://example.com")
+        await client._ensure_token()
+        assert client._config.access_token is None
 
 
 class TestSdkSendsBearerToken:
