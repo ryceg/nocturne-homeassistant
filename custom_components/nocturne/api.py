@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+import time
+from datetime import date
 
 from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from nocturne_py import (
@@ -41,6 +42,8 @@ from urllib3.exceptions import HTTPError
 
 _LOGGER = logging.getLogger(__name__)
 
+DAILY_SUMMARY_CACHE_SECONDS = 30 * 60
+
 
 class NocturneApiClient:
     """Nocturne v4 API client using the nocturne-py SDK."""
@@ -55,6 +58,7 @@ class NocturneApiClient:
         self._oauth_session = oauth_session
         self._static_token = access_token
         self._warned_missing_reports_scope = False
+        self._daily_summary_cache: tuple[date, float, DailySummaryDay | None] | None = None
 
     async def _ensure_token(self) -> None:
         """Refresh the OAuth token and update the SDK configuration."""
@@ -149,20 +153,29 @@ class NocturneApiClient:
 
         return await asyncio.to_thread(_call)
 
-    async def get_daily_summary(self) -> DailySummaryDay | None:
-        """Fetch today's daily summary (time in range, etc.).
+    async def get_daily_summary(self, today: date) -> DailySummaryDay | None:
+        """Fetch the daily summary (time in range, etc.) for ``today``.
 
-        Returns None when the grant lacks ``reports.read``: entries authorised
-        before that scope was requested keep their other sensors until reauth.
+        Returns None when the grant lacks ``reports.read`` (entries authorised
+        before that scope was requested keep their other sensors until reauth)
+        and when the server has no data for ``today``. The answer, found or not,
+        is reused for 30 minutes.
         """
+        cached = self._daily_summary_cache
+        if (
+            cached is not None
+            and cached[0] == today
+            and time.monotonic() - cached[1] < DAILY_SUMMARY_CACHE_SECONDS
+        ):
+            return cached[2]
+
         await self._ensure_token()
-        year = datetime.now().year
 
         def _call() -> DailySummaryDay | None:
             with self._client() as client:
                 api = DataOverviewApi(client)
                 try:
-                    resp = api.data_overview_get_daily_summary(year=year)
+                    resp = api.data_overview_get_daily_summary(year=today.year)
                 except ApiException as err:
                     if err.status == 403:
                         if not self._warned_missing_reports_scope:
@@ -173,11 +186,15 @@ class NocturneApiClient:
                             )
                         return None
                     raise
-                if resp.days:
-                    return resp.days[-1]
+                today_iso = today.isoformat()
+                for day in resp.days or []:
+                    if day.var_date == today_iso:
+                        return day
                 return None
 
-        return await asyncio.to_thread(_call)
+        day = await asyncio.to_thread(_call)
+        self._daily_summary_cache = (today, time.monotonic(), day)
+        return day
 
     async def get_sensor_age(self) -> DeviceAgeInfo | None:
         """Fetch sensor age information."""

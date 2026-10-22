@@ -11,6 +11,7 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import UpdateFailed
+from homeassistant.util import dt as dt_util
 from nocturne_py import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
 from nocturne_py.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -128,6 +129,7 @@ class TestDeviceCoordinator:
         assert result["pump"].reservoir == 150.0
         assert result["uploader"].battery == 90
         assert result["daily_summary"].time_in_range_percent == 72.5
+        mock_client.get_daily_summary.assert_called_once_with(dt_util.now().date())
         assert result["sensor_age"].days == 5
 
     async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
