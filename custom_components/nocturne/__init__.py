@@ -33,7 +33,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
-from .signalr import NOT_CONNECTED_MESSAGE, NocturneSignalRClient
+from .signalr import NOT_CONNECTED_MESSAGE, NocturneSignalRClient, TokenProvider
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -115,38 +115,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     async def _on_disconnected() -> None:
         _LOGGER.info("SignalR disconnected")
 
-    async def _get_fresh_token() -> str:
-        return entry.data["token"]["access_token"]
-
     signalr_client = NocturneSignalRClient(
         hass=hass,
         instance_url=base_url,
-        access_token=entry.data["token"]["access_token"],
         instance_id=entry.data.get(CONF_CLIENT_ID, ""),
+        async_get_token=_access_token_provider(oauth_session),
         on_glucose_reading=_on_glucose_reading,
         on_alert_dispatch=alert_handler.handle_alert_dispatch,
         on_alert_resolved=alert_handler.handle_alert_resolved,
         on_alert_acknowledged=alert_handler.handle_alert_acknowledged,
-        async_get_token=_get_fresh_token,
         on_disconnected=_on_disconnected,
     )
 
     hass.data[DOMAIN][entry.entry_id]["signalr_client"] = signalr_client
     hass.data[DOMAIN][entry.entry_id]["instance_name"] = instance_name
 
-    try:
-        await signalr_client.start()
-    except Exception:
-        _LOGGER.warning(
-            "Failed to start SignalR connection; real-time updates unavailable",
-            exc_info=True,
-        )
+    signalr_client.start(entry)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _register_services(hass, entry)
 
     return True
+
+
+def _access_token_provider(oauth_session: OAuth2Session) -> TokenProvider:
+    """Return a provider that refreshes the OAuth token when it is due and yields it."""
+
+    async def _get_access_token() -> str:
+        await oauth_session.async_ensure_token_valid()
+        return oauth_session.token["access_token"]
+
+    return _get_access_token
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:

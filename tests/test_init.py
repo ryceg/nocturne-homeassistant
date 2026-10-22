@@ -9,10 +9,28 @@ from homeassistant.exceptions import HomeAssistantError
 from nocturne_py import CreateBolusRequest, CreateCarbIntakeRequest, CreateStateSpanRequest, StateSpanCategory
 
 from custom_components.nocturne import (
+    _access_token_provider,
     _get_client,
     _register_services,
 )
 from custom_components.nocturne.const import DATA_SOURCE_HOME_ASSISTANT, DOMAIN
+
+
+class TestAccessTokenProvider:
+    async def test_each_call_refreshes_and_returns_the_current_token(self):
+        oauth_session = MagicMock()
+        oauth_session.token = {"access_token": "expired"}
+        refreshed = iter(["fresh-1", "fresh-2"])
+
+        async def _refresh() -> None:
+            oauth_session.token = {"access_token": next(refreshed)}
+
+        oauth_session.async_ensure_token_valid = AsyncMock(side_effect=_refresh)
+        get_token = _access_token_provider(oauth_session)
+
+        assert await get_token() == "fresh-1"
+        assert await get_token() == "fresh-2"
+        assert oauth_session.async_ensure_token_valid.await_count == 2
 
 
 class TestGetClient:
