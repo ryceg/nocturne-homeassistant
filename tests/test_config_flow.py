@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
@@ -24,6 +26,7 @@ from custom_components.nocturne.const import (
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_TOKEN_URL,
+    DEFAULT_SCOPES,
     DOMAIN,
 )
 
@@ -92,6 +95,98 @@ NEW_TOKEN = {
     "expires_in": 3600,
     "token_type": "Bearer",
 }
+
+
+async def _start_user_flow(hass, aioclient_mock, instance_url, client_id):
+    aioclient_mock.get(
+        f"{instance_url}/.well-known/openid-configuration",
+        json={
+            "authorization_endpoint": f"{instance_url}/oauth/authorize",
+            "token_endpoint": f"{instance_url}/oauth/token",
+            "registration_endpoint": f"{instance_url}/oauth/register",
+        },
+    )
+    aioclient_mock.post(f"{instance_url}/oauth/register", json={"client_id": client_id})
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    with patch("custom_components.nocturne.config_flow.NocturneApiClient") as api:
+        api.return_value.validate_connection = AsyncMock(return_value=True)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_INSTANCE_URL: instance_url}
+        )
+    assert result["type"] is FlowResultType.EXTERNAL_STEP
+    query = parse_qs(urlparse(result["url"]).query)
+    assert query["client_id"] == [client_id]
+    assert query["scope"] == [" ".join(DEFAULT_SCOPES)]
+    assert query["code_challenge_method"] == ["S256"]
+    return result["flow_id"], query
+
+
+async def _finish_user_flow(hass, hass_client_no_auth, aioclient_mock, flow_id, query, instance_url):
+    client = await hass_client_no_auth()
+    resp = await client.get(f"/auth/external/callback?code=auth-code&state={query['state'][0]}")
+    assert resp.status == 200
+    aioclient_mock.post(f"{instance_url}/oauth/token", json=NEW_TOKEN)
+    with patch("custom_components.nocturne.async_setup_entry", return_value=True):
+        result = await hass.config_entries.flow.async_configure(flow_id)
+        await hass.async_block_till_done()
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    return result["result"], aioclient_mock.mock_calls[-1][2]
+
+
+def _challenge(verifier: str) -> str:
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
+
+class TestUserFlow:
+    async def test_flows_in_progress_keep_their_own_client_and_verifier(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        first_url, second_url = "https://first.example.com", "https://second.example.com"
+        first_flow, first_query = await _start_user_flow(
+            reauth_hass, aioclient_mock, first_url, "first-client"
+        )
+        second_flow, second_query = await _start_user_flow(
+            reauth_hass, aioclient_mock, second_url, "second-client"
+        )
+
+        first_entry, first_request = await _finish_user_flow(
+            reauth_hass, hass_client_no_auth, aioclient_mock, first_flow, first_query, first_url
+        )
+        second_entry, second_request = await _finish_user_flow(
+            reauth_hass, hass_client_no_auth, aioclient_mock, second_flow, second_query, second_url
+        )
+
+        assert first_request["client_id"] == "first-client"
+        assert _challenge(first_request["code_verifier"]) == first_query["code_challenge"][0]
+        assert second_request["client_id"] == "second-client"
+        assert _challenge(second_request["code_verifier"]) == second_query["code_challenge"][0]
+        assert first_request["code_verifier"] != second_request["code_verifier"]
+        assert "client_secret" not in first_request
+        assert first_entry.data[CONF_CLIENT_ID] == "first-client"
+        assert first_entry.data[CONF_TOKEN_URL] == f"{first_url}/oauth/token"
+        assert second_entry.data[CONF_CLIENT_ID] == "second-client"
+        assert second_entry.data[CONF_TOKEN_URL] == f"{second_url}/oauth/token"
+
+
+    async def test_uses_the_registered_redirect_uri_throughout(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        redirect_uri = "https://ha.example.com/auth/external/callback"
+        flow_id, query = await _start_user_flow(
+            reauth_hass, aioclient_mock, INSTANCE_URL, CLIENT_ID
+        )
+        registration = next(
+            data for _, url, data, _ in aioclient_mock.mock_calls
+            if str(url) == f"{INSTANCE_URL}/oauth/register"
+        )
+
+        _, token_request = await _finish_user_flow(
+            reauth_hass, hass_client_no_auth, aioclient_mock, flow_id, query, INSTANCE_URL
+        )
+
+        assert registration["redirect_uris"] == [redirect_uri]
+        assert query["redirect_uri"] == [redirect_uri]
+        assert token_request["redirect_uri"] == redirect_uri
 
 
 class TestAsyncStepUser:
@@ -222,7 +317,7 @@ class TestAsyncOAuthCreateEntry:
         flow.hass = MagicMock()
         flow.context = {"source": SOURCE_USER}
         flow._instance_url = "https://example.com"
-        flow._client_id = "test-client-id"
+        flow.flow_impl = MagicMock(client_id="test-client-id")
         flow._authorize_url = "https://example.com/oauth/authorize"
         flow._token_url = "https://example.com/oauth/token"
         flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
