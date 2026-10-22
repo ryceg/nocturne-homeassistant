@@ -13,10 +13,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
+    AUTH_CALLBACK_PATH,
+    MY_AUTH_CALLBACK_PATH,
     AbstractOAuth2FlowHandler,
     LocalOAuth2ImplementationWithPkce,
 )
-from homeassistant.helpers.network import get_url
+from homeassistant.helpers.network import NoURLAvailableError, get_url
 
 from .api import NocturneApiClient
 from .const import (
@@ -24,6 +26,7 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_NOTIFY_SERVICES,
+    CONF_REDIRECT_URI,
     CONF_REQUESTED_SCOPES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
@@ -32,6 +35,24 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _external_callback_uri(hass: HomeAssistant) -> str:
+    return f"{get_url(hass, allow_internal=False, allow_ip=False)}{AUTH_CALLBACK_PATH}"
+
+
+def registration_redirect_uri(hass: HomeAssistant) -> str:
+    """Return the redirect URI to register a new client with.
+
+    The external URL comes first because its callback is unique to this install, which keeps
+    each install on its own client. Raises NoURLAvailableError when HA has neither.
+    """
+    try:
+        return _external_callback_uri(hass)
+    except NoURLAvailableError:
+        if "my" in hass.config.components:
+            return MY_AUTH_CALLBACK_PATH
+        raise
 
 
 class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
@@ -43,8 +64,10 @@ class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
         client_id: str,
         authorize_url: str,
         token_url: str,
+        redirect_uri: str | None = None,
     ) -> None:
         super().__init__(hass, DOMAIN, client_id, authorize_url, token_url)
+        self._redirect_uri = redirect_uri
 
     @classmethod
     def from_entry_data(
@@ -56,6 +79,7 @@ class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
             data[CONF_CLIENT_ID],
             data[CONF_AUTHORIZE_URL],
             data[CONF_TOKEN_URL],
+            data.get(CONF_REDIRECT_URI),
         )
 
     @property
@@ -64,8 +88,11 @@ class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
 
     @property
     def redirect_uri(self) -> str:
-        """Return HA's external auth callback URL."""
-        return f"{get_url(self.hass, allow_internal=False, allow_ip=False)}/auth/external/callback"
+        """Return the redirect URI the client registered with.
+
+        Entries made before it was stored registered the external URL callback.
+        """
+        return self._redirect_uri or _external_callback_uri(self.hass)
 
 
 class NocturneOptionsFlowHandler(OptionsFlow):
@@ -136,6 +163,10 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
+            try:
+                redirect_uri = registration_redirect_uri(self.hass)
+            except NoURLAvailableError:
+                return self._show_form({"base": "no_redirect_url"})
             url = user_input[CONF_INSTANCE_URL].rstrip("/")
             session = async_get_clientsession(self.hass)
             client = NocturneApiClient(url)
@@ -177,7 +208,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                         else f"{url}/api/oauth/register"
                     )
                     dcr_response = await self._register_client(
-                        session, registration_endpoint
+                        session, registration_endpoint, redirect_uri
                     )
                     if dcr_response is None:
                         errors["base"] = "cannot_connect"
@@ -188,6 +219,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                         dcr_response["client_id"],
                         self._authorize_url,
                         self._token_url,
+                        redirect_uri,
                     )
 
                     return await self.async_step_auth()
@@ -240,6 +272,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         data[CONF_CLIENT_ID] = self.flow_impl.client_id
         data[CONF_AUTHORIZE_URL] = self._authorize_url
         data[CONF_TOKEN_URL] = self._token_url
+        data[CONF_REDIRECT_URI] = self.flow_impl.redirect_uri
         return self.async_create_entry(title="Nocturne", data=data)
 
     async def _fetch_discovery(
@@ -257,10 +290,9 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         return None
 
     async def _register_client(
-        self, session: ClientSession, registration_url: str
+        self, session: ClientSession, registration_url: str, redirect_uri: str
     ) -> dict[str, Any] | None:
         """Register as an OAuth client via Dynamic Client Registration."""
-        redirect_uri = f"{get_url(self.hass, allow_internal=False, allow_ip=False)}/auth/external/callback"
         try:
             resp = await session.post(
                 registration_url,

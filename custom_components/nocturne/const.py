@@ -6,6 +6,7 @@ CONF_INSTANCE_URL = "instance_url"
 CONF_CLIENT_ID = "client_id"
 CONF_AUTHORIZE_URL = "authorize_url"
 CONF_TOKEN_URL = "token_url"
+CONF_REDIRECT_URI = "redirect_uri"
 
 SOFTWARE_ID = "io.home-assistant.nocturne"
 

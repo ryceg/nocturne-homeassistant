@@ -11,6 +11,7 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers.config_entry_oauth2_flow import MY_AUTH_CALLBACK_PATH
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.nocturne.config_flow import (
@@ -22,6 +23,7 @@ from custom_components.nocturne.const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
+    CONF_REDIRECT_URI,
     CONF_REQUESTED_SCOPES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
@@ -155,13 +157,87 @@ class TestUserFlow:
         assert query["redirect_uri"] == [redirect_uri]
         assert token_request["redirect_uri"] == redirect_uri
 
+    async def test_registers_with_my_home_assistant_when_there_is_no_external_url(
+        self, my_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        flow_id, query = await _start_user_flow(my_hass, aioclient_mock, INSTANCE_URL, CLIENT_ID)
+        registration = next(
+            data for _, url, data, _ in aioclient_mock.mock_calls
+            if str(url) == f"{INSTANCE_URL}/oauth/register"
+        )
+
+        entry, token_request = await _finish_user_flow(
+            my_hass, hass_client_no_auth, aioclient_mock, flow_id, query, INSTANCE_URL
+        )
+
+        assert registration["redirect_uris"] == [MY_AUTH_CALLBACK_PATH]
+        assert query["redirect_uri"] == [MY_AUTH_CALLBACK_PATH]
+        assert token_request["redirect_uri"] == MY_AUTH_CALLBACK_PATH
+        assert entry.data[CONF_REDIRECT_URI] == MY_AUTH_CALLBACK_PATH
+
+    async def test_prefers_the_external_url_over_my_home_assistant(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        reauth_hass.config.components.add("my")
+        external_callback = "https://ha.example.com/auth/external/callback"
+        flow_id, query = await _start_user_flow(
+            reauth_hass, aioclient_mock, INSTANCE_URL, CLIENT_ID
+        )
+        registration = next(
+            data for _, url, data, _ in aioclient_mock.mock_calls
+            if str(url) == f"{INSTANCE_URL}/oauth/register"
+        )
+
+        entry, token_request = await _finish_user_flow(
+            reauth_hass, hass_client_no_auth, aioclient_mock, flow_id, query, INSTANCE_URL
+        )
+
+        assert registration["redirect_uris"] == [external_callback]
+        assert query["redirect_uri"] == [external_callback]
+        assert token_request["redirect_uri"] == external_callback
+        assert entry.data[CONF_REDIRECT_URI] == external_callback
+
+    async def test_stores_the_external_url_callback_it_registered(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        flow_id, query = await _start_user_flow(
+            reauth_hass, aioclient_mock, INSTANCE_URL, CLIENT_ID
+        )
+
+        entry, _ = await _finish_user_flow(
+            reauth_hass, hass_client_no_auth, aioclient_mock, flow_id, query, INSTANCE_URL
+        )
+
+        assert entry.data[CONF_REDIRECT_URI] == "https://ha.example.com/auth/external/callback"
+
+    async def test_asks_for_an_external_url_when_there_is_no_way_to_redirect(
+        self, hass: HomeAssistant, enable_custom_integrations: None,
+        aioclient_mock: AiohttpClientMocker,
+    ):
+        hass.config.external_url = None
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        with patch("custom_components.nocturne.config_flow.NocturneApiClient") as api:
+            api.return_value.validate_connection = AsyncMock(return_value=True)
+            result = await hass.config_entries.flow.async_configure(
+                result["flow_id"], {CONF_INSTANCE_URL: INSTANCE_URL}
+            )
+
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "user"
+        assert result["errors"] == {"base": "no_redirect_url"}
+        assert aioclient_mock.call_count == 0
+
 
 class TestAsyncStepUser:
     @pytest.fixture
     def flow(self):
         flow = NocturneOAuth2FlowHandler()
         flow.hass = MagicMock()
-        return flow
+        with patch(
+            "custom_components.nocturne.config_flow.registration_redirect_uri",
+            return_value="https://ha.example.com/auth/external/callback",
+        ):
+            yield flow
 
     @patch(
         "custom_components.nocturne.config_flow.async_get_clientsession",
@@ -275,6 +351,52 @@ class TestReauth:
         setup.assert_not_called()
 
 
+class TestRedirectUri:
+    async def test_reauth_uses_the_stored_redirect_uri_even_if_the_ha_url_changed(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        entry = make_entry(**{CONF_REDIRECT_URI: MY_AUTH_CALLBACK_PATH})
+        entry.add_to_hass(reauth_hass)
+
+        await _authorise(reauth_hass, hass_client_no_auth, aioclient_mock, entry, NEW_TOKEN)
+
+        assert aioclient_mock.mock_calls[-1][2]["redirect_uri"] == MY_AUTH_CALLBACK_PATH
+        assert entry.data[CONF_REDIRECT_URI] == MY_AUTH_CALLBACK_PATH
+
+    async def test_entry_without_one_registered_the_external_url_callback(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        entry = make_entry()
+        entry.add_to_hass(reauth_hass)
+
+        await _authorise(reauth_hass, hass_client_no_auth, aioclient_mock, entry, NEW_TOKEN)
+
+        assert (
+            aioclient_mock.mock_calls[-1][2]["redirect_uri"]
+            == "https://ha.example.com/auth/external/callback"
+        )
+
+    async def test_reauth_aborts_when_the_registered_external_url_is_gone(
+        self, reauth_hass
+    ):
+        reauth_hass.config.external_url = None
+        entry = make_entry()
+        entry.add_to_hass(reauth_hass)
+        result = await entry.start_reauth_flow(reauth_hass)
+
+        result = await reauth_hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+        assert result["type"] is FlowResultType.ABORT
+        assert result["reason"] == "no_url_available"
+
+    async def test_stored_redirect_uri_beats_the_computed_one(self, my_hass):
+        impl = NocturneOAuth2Implementation.from_entry_data(
+            my_hass, make_entry(**{CONF_REDIRECT_URI: "https://stored.example.com/cb"}).data
+        )
+
+        assert impl.redirect_uri == "https://stored.example.com/cb"
+
+
 class TestRefreshToken:
     async def test_keeps_refresh_token_when_response_omits_it(
         self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
@@ -296,7 +418,9 @@ class TestAsyncOAuthCreateEntry:
         flow.hass = MagicMock()
         flow.context = {"source": SOURCE_USER}
         flow._instance_url = "https://example.com"
-        flow.flow_impl = MagicMock(client_id="test-client-id")
+        flow.flow_impl = MagicMock(
+            client_id="test-client-id", redirect_uri="https://ha.example.com/auth/external/callback"
+        )
         flow._authorize_url = "https://example.com/oauth/authorize"
         flow._token_url = "https://example.com/oauth/token"
         flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
@@ -309,6 +433,7 @@ class TestAsyncOAuthCreateEntry:
         assert data[CONF_CLIENT_ID] == "test-client-id"
         assert data[CONF_AUTHORIZE_URL] == "https://example.com/oauth/authorize"
         assert data[CONF_TOKEN_URL] == "https://example.com/oauth/token"
+        assert data[CONF_REDIRECT_URI] == "https://ha.example.com/auth/external/callback"
         assert data[CONF_REQUESTED_SCOPES] == DEFAULT_SCOPES
 
 
