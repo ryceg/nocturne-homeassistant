@@ -24,6 +24,7 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_NOTIFY_SERVICES,
+    CONF_REQUESTED_SCOPES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
     DOMAIN,
@@ -228,6 +229,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         self, data: dict[str, Any]
     ) -> ConfigFlowResult:
         """Create the config entry after OAuth completes."""
+        data[CONF_REQUESTED_SCOPES] = list(DEFAULT_SCOPES)
         if self.source == SOURCE_REAUTH:
             await self.async_set_unique_id(self._instance_url)
             self._abort_if_unique_id_mismatch(reason="wrong_instance")
