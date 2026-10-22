@@ -3,15 +3,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine
+import time
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
 from aiohttp import ClientError
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util.ssl import get_default_context
 from pysignalr.client import SignalRClient
+from pysignalr.exceptions import HubError
 from pysignalr.messages import CompletionMessage
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 from .const import SIGNALR_HUB_PATH
 
@@ -22,6 +26,23 @@ ACKNOWLEDGE_TIMEOUT_SECONDS = 10
 ACKNOWLEDGE_SUCCESS_OUTCOMES = frozenset({"acknowledged", "muted"})
 
 AsyncCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+TokenProvider = Callable[[], Awaitable[str]]
+
+RECONNECT_INITIAL_DELAY = 1.0
+RECONNECT_MAX_DELAY = 300.0
+STABLE_CONNECTION_SECONDS = 60.0
+
+_CONNECTION_ERRORS = (
+    HubError,
+    WebSocketException,
+    ClientError,
+    OSError,
+    TimeoutError,
+    RuntimeError,
+    ValueError,
+    KeyError,
+    HomeAssistantError,
+)
 
 
 class NocturneSignalRClient:
@@ -31,28 +52,29 @@ class NocturneSignalRClient:
         self,
         hass: HomeAssistant,
         instance_url: str,
-        access_token: str,
         instance_id: str,
+        async_get_token: TokenProvider,
         on_glucose_reading: AsyncCallback,
         on_alert_dispatch: AsyncCallback,
         on_alert_resolved: AsyncCallback,
         on_alert_acknowledged: AsyncCallback,
-        async_get_token: Callable[[], Coroutine[Any, Any, str]] | None = None,
         on_disconnected: Callable[[], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         self._hass = hass
         self._instance_url = instance_url.rstrip("/")
-        self._access_token = access_token
         self._instance_id = instance_id
+        self._async_get_token = async_get_token
         self._on_glucose_reading = on_glucose_reading
         self._on_alert_dispatch = on_alert_dispatch
         self._on_alert_resolved = on_alert_resolved
         self._on_alert_acknowledged = on_alert_acknowledged
-        self._async_get_token = async_get_token
         self._on_disconnected_cb = on_disconnected
         self._client: SignalRClient | None = None
         self._task: asyncio.Task | None = None
         self._connected = False
+        self._connected_at: float | None = None
+        self._failing = False
+        self._closed = asyncio.Event()
 
     @property
     def hub_url(self) -> str:
@@ -62,19 +84,11 @@ class NocturneSignalRClient:
     def connected(self) -> bool:
         return self._connected
 
-    async def start(self) -> None:
-        """Start the SignalR connection."""
-        self._client = SignalRClient(
-            url=self.hub_url,
-            headers={"Authorization": f"Bearer {self._access_token}"},
+    def start(self, entry: ConfigEntry) -> None:
+        """Keep the connection up for as long as the entry is loaded."""
+        self._task = entry.async_create_background_task(
+            self._hass, self._run(), name=f"nocturne_signalr_{entry.entry_id}"
         )
-        self._client.on("glucose_reading", self._handle_glucose_reading)
-        self._client.on("alert_dispatch", self._handle_alert_dispatch)
-        self._client.on("alert_resolved", self._handle_alert_resolved)
-        self._client.on("alert_acknowledged", self._handle_alert_acknowledged)
-        self._client.on_open(self._on_connected)
-        self._client.on_close(self._on_disconnected)
-        self._task = asyncio.create_task(self._client.run())
         _LOGGER.info("SignalR connection started to %s", self.hub_url)
 
     async def stop(self) -> None:
@@ -131,20 +145,77 @@ class NocturneSignalRClient:
             "Excursion %s acknowledged by %s: %s", excursion_id, acknowledged_by, message.result
         )
 
-    async def _on_connected(self) -> None:
-        # Refresh token if callback provided
-        if self._async_get_token:
+    async def _run(self) -> None:
+        delay = RECONNECT_INITIAL_DELAY
+        while True:
+            self._connected_at = None
             try:
-                self._access_token = await self._async_get_token()
-            except (KeyError, ClientError, HomeAssistantError):
-                _LOGGER.warning("Failed to refresh token before subscribe")
+                await self._connect_once()
+            except _CONNECTION_ERRORS as err:
+                log = _LOGGER.debug if self._failing else _LOGGER.warning
+                log("SignalR connection failed: %r", err)
+                self._failing = True
+            except Exception:
+                _LOGGER.exception("Unexpected SignalR error")
+                self._failing = True
+            if (
+                self._connected_at is not None
+                and time.monotonic() - self._connected_at >= STABLE_CONNECTION_SECONDS
+            ):
+                delay = RECONNECT_INITIAL_DELAY
+            _LOGGER.debug("Reconnecting to SignalR in %.0fs", delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RECONNECT_MAX_DELAY)
+
+    async def _connect_once(self) -> None:
+        token = await self._async_get_token()
+        # pysignalr reconnects internally with the token and connection ID it started with,
+        # so each attempt gets a new client and ends when that connection closes.
+        client = SignalRClient(
+            url=self.hub_url,
+            headers={"Authorization": f"Bearer {token}"},
+            retry_count=1,
+            ssl=get_default_context() if self.hub_url.startswith("https://") else None,
+        )
+        client.on("glucose_reading", self._handle_glucose_reading)
+        client.on("alert_dispatch", self._handle_alert_dispatch)
+        client.on("alert_resolved", self._handle_alert_resolved)
+        client.on("alert_acknowledged", self._handle_alert_acknowledged)
+        client.on_open(self._on_connected)
+        client.on_close(self._on_disconnected)
+        self._client = client
+        self._closed.clear()
+
+        run = asyncio.create_task(client.run())
+        closed = asyncio.create_task(self._closed.wait())
+        try:
+            await asyncio.wait((run, closed), return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            run.cancel()
+            closed.cancel()
+            await asyncio.gather(run, closed, return_exceptions=True)
+            self._connected = False
+        if run.done() and not run.cancelled() and (err := run.exception()) is not None:
+            raise err
+
+    async def _on_connected(self) -> None:
         self._connected = True
-        _LOGGER.info("SignalR connected, subscribing as instance %s", self._instance_id)
+        self._connected_at = time.monotonic()
+        _LOGGER.info(
+            "SignalR %s, subscribing as instance %s",
+            "reconnected" if self._failing else "connected",
+            self._instance_id,
+        )
+        self._failing = False
         if self._client:
             await self._client.send("Subscribe", [self._instance_id])
 
     async def _on_disconnected(self) -> None:
+        was_connected = self._connected
         self._connected = False
+        self._closed.set()
+        if not was_connected:
+            return
         _LOGGER.warning("SignalR connection lost, will reconnect automatically")
         if self._on_disconnected_cb:
             await self._on_disconnected_cb()

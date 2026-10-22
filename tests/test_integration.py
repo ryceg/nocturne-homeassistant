@@ -264,8 +264,8 @@ class TestAcknowledgeServiceFlow:
         signalr_client = NocturneSignalRClient(
             hass=mock_hass,
             instance_url="https://nocturne.example.com",
-            access_token="test-token",
             instance_id="test-client-id",
+            async_get_token=AsyncMock(return_value="test-token"),
             on_glucose_reading=AsyncMock(),
             on_alert_dispatch=AsyncMock(),
             on_alert_resolved=AsyncMock(),
@@ -290,8 +290,8 @@ class TestAcknowledgeServiceFlow:
         signalr_client = NocturneSignalRClient(
             hass=mock_hass,
             instance_url="https://nocturne.example.com",
-            access_token="test-token",
             instance_id="test-client-id",
+            async_get_token=AsyncMock(return_value="test-token"),
             on_glucose_reading=AsyncMock(),
             on_alert_dispatch=AsyncMock(),
             on_alert_resolved=AsyncMock(),
@@ -470,8 +470,8 @@ class TestFullLifecycle:
         signalr_client = NocturneSignalRClient(
             hass=mock_hass,
             instance_url="https://nocturne.example.com",
-            access_token="test-token",
             instance_id="test-client-id",
+            async_get_token=AsyncMock(return_value="test-token"),
             on_glucose_reading=AsyncMock(),
             on_alert_dispatch=handler.handle_alert_dispatch,
             on_alert_resolved=handler.handle_alert_resolved,
