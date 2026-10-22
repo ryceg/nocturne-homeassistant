@@ -23,7 +23,7 @@ def handler(mock_hass):
     return NocturneAlertHandler(
         hass=mock_hass,
         notify_services=["notify.mobile_app_phone"],
-        instance_name="test-hub",
+        display_name=lambda: "test-hub",
     )
 
 
@@ -137,6 +137,14 @@ async def test_resolved_dismisses_notification(handler, mock_hass):
 
 
 @pytest.mark.asyncio
+async def test_dispatch_notifications_name_the_instance(handler, mock_hass):
+    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
+
+    titles = [c[0][2]["title"] for c in mock_hass.services.async_call.call_args_list]
+    assert titles == ["Nocturne (test-hub): Urgent Low"] * 2
+
+
+@pytest.mark.asyncio
 async def test_excursion_acknowledgement_updates_its_notification(handler, mock_hass):
     await handler.handle_alert_dispatch(fixtures.alert_dispatch())
     mock_hass.services.async_call.reset_mock()
@@ -147,7 +155,7 @@ async def test_excursion_acknowledgement_updates_its_notification(handler, mock_
     pn_calls = _calls(mock_hass, "persistent_notification")
     assert len(pn_calls) == 1
     assert pn_calls[0][0][1] == "create"
-    assert pn_calls[0][0][2]["title"] == "Nocturne: Urgent Low (Acknowledged)"
+    assert pn_calls[0][0][2]["title"] == "Nocturne (test-hub): Urgent Low (Acknowledged)"
 
 
 @pytest.mark.asyncio

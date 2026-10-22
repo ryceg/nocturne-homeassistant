@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
-from custom_components.nocturne import _access_token_provider
+from custom_components.nocturne import _access_token_provider, _display_name
 from custom_components.nocturne.const import (
     CONF_CLIENT_ID,
     CONF_NOTIFY_SERVICES,
@@ -145,6 +145,25 @@ class TestEntryLifecycle:
 
         assert entry.state is ConfigEntryState.FAILED_UNLOAD
         entry.runtime_data.signalr_client.stop.assert_not_awaited()
+
+
+class TestInstanceNaming:
+    def test_a_renamed_entry_is_named_by_its_title(self):
+        assert _display_name(make_entry(title="Dad")) == "Dad"
+
+    def test_the_default_title_is_replaced_by_the_instance_host(self):
+        assert _display_name(make_entry()) == "nocturne.example.com"
+
+    async def test_alerts_follow_an_entry_rename(self, reauth_hass, stubs):
+        entry = make_entry(expires_in=3600)
+        await set_up(reauth_hass, entry)
+        reauth_hass.config_entries.async_update_entry(entry, title="Dad")
+        assert entry.runtime_data.alert_handler._display_name() == "Dad"
+
+    async def test_the_client_id_stays_the_acknowledging_identity(self, reauth_hass, stubs):
+        entry = make_entry(expires_in=3600, title="Dad")
+        await set_up(reauth_hass, entry)
+        assert entry.runtime_data.instance_name == entry.data[CONF_CLIENT_ID]
 
 
 class TestScopeReauth:
