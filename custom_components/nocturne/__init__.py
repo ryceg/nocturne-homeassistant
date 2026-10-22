@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -23,6 +24,7 @@ from .const import (
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
     CONF_NOTIFY_SERVICES,
+    DEFAULT_TITLE,
     DOMAIN,
     missing_scopes,
 )
@@ -81,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
 
     notify_services: list[str] = entry.options.get(CONF_NOTIFY_SERVICES, [])
     instance_name = entry.data.get(CONF_CLIENT_ID, "unknown")
-    alert_handler = NocturneAlertHandler(hass, notify_services, instance_name)
+    alert_handler = NocturneAlertHandler(hass, notify_services, lambda: _display_name(entry))
 
     async def _on_glucose_reading(data: dict) -> None:
         await glucose_coordinator.async_handle_glucose_push()
@@ -121,6 +123,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
         entry.async_start_reauth(hass)
 
     return True
+
+
+def _display_name(entry: NocturneConfigEntry) -> str:
+    """Name the instance for people: the entry title, or its host while the title is the default."""
+    if entry.title != DEFAULT_TITLE:
+        return entry.title
+    return urlparse(entry.data[CONF_INSTANCE_URL]).hostname or entry.title
 
 
 def _access_token_provider(oauth_session: OAuth2Session) -> TokenProvider:

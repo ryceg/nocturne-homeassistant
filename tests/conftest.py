@@ -43,11 +43,12 @@ def make_entry(
     client_id: str = CLIENT_ID,
     unique_id: str | None = None,
     expires_in: float = -10,
+    title: str = "Nocturne",
     **data: object,
 ) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
-        title="Nocturne",
+        title=title,
         unique_id=unique_id or instance_url,
         data={
             "auth_implementation": DOMAIN,

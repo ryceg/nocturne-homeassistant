@@ -42,7 +42,7 @@ def single_notify_handler(mock_hass):
     return NocturneAlertHandler(
         hass=mock_hass,
         notify_services=["notify.mobile_app_phone"],
-        instance_name="test-hub",
+        display_name=lambda: "test-hub",
     )
 
 
@@ -52,7 +52,7 @@ def multi_notify_handler(mock_hass):
     return NocturneAlertHandler(
         hass=mock_hass,
         notify_services=["notify.mobile_app_phone", "notify.mobile_app_tablet"],
-        instance_name="test-hub",
+        display_name=lambda: "test-hub",
     )
 
 
@@ -62,7 +62,7 @@ def no_notify_handler(mock_hass):
     return NocturneAlertHandler(
         hass=mock_hass,
         notify_services=[],
-        instance_name="test-hub",
+        display_name=lambda: "test-hub",
     )
 
 
@@ -194,7 +194,7 @@ class TestAlertAcknowledgedFlow:
         assert len(pn_calls) == 1
         assert pn_calls[0][0][1] == "create"
         service_data = pn_calls[0][0][2]
-        assert service_data["title"] == "Nocturne: Urgent Low (Acknowledged)"
+        assert service_data["title"] == "Nocturne (test-hub): Urgent Low (Acknowledged)"
         assert "homeassistant:test-hub" in service_data["message"]
         assert service_data["notification_id"] == f"nocturne_alert_{fixtures.EXCURSION_ID}"
 
@@ -434,7 +434,7 @@ class TestFullLifecycle:
         handler = NocturneAlertHandler(
             hass=mock_hass,
             notify_services=["notify.mobile_app_phone"],
-            instance_name="test-hub",
+            display_name=lambda: "test-hub",
         )
 
         signalr_client = NocturneSignalRClient(

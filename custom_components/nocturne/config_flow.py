@@ -31,6 +31,7 @@ from .const import (
     CONF_REQUESTED_SCOPES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
+    DEFAULT_TITLE,
     DOMAIN,
     SOFTWARE_ID,
 )
@@ -273,7 +274,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         data[CONF_AUTHORIZE_URL] = self._authorize_url
         data[CONF_TOKEN_URL] = self._token_url
         data[CONF_REDIRECT_URI] = self.flow_impl.redirect_uri
-        return self.async_create_entry(title="Nocturne", data=data)
+        return self.async_create_entry(title=DEFAULT_TITLE, data=data)
 
     async def _fetch_discovery(
         self, session: ClientSession, url: str

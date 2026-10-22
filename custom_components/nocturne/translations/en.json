@@ -19,9 +19,19 @@
     },
     "abort": {
       "already_configured": "This Nocturne instance is already configured.",
+      "already_in_progress": "Setup for this Nocturne instance is already in progress.",
       "reauth_successful": "Reauthentication was successful.",
       "no_url_available": "The external URL this integration was registered with is no longer configured in Home Assistant. Set it again and retry. [More info]({docs_url})",
-      "wrong_instance": "You signed in to a different Nocturne instance than the one this entry uses."
+      "wrong_instance": "You signed in to a different Nocturne instance than the one this entry uses.",
+      "oauth_error": "Received invalid token data.",
+      "oauth_failed": "Error while obtaining access token.",
+      "oauth_timeout": "Timeout resolving OAuth token.",
+      "oauth_unauthorized": "OAuth authorization error while obtaining access token.",
+      "missing_configuration": "The component is not configured. Please follow the documentation.",
+      "missing_credentials": "The integration requires application credentials.",
+      "authorize_url_timeout": "Timeout generating authorize URL.",
+      "oauth_implementation_unavailable": "No OAuth2 implementations are currently available.",
+      "user_rejected_authorize": "Account linking rejected: {error}"
     }
   },
   "options": {
@@ -32,6 +42,46 @@
         "data": {
           "notify_services": "Notification services"
         }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "current_glucose": {
+        "name": "Current Glucose"
+      },
+      "glucose_trend": {
+        "name": "Glucose Trend"
+      },
+      "iob": {
+        "name": "Insulin on Board"
+      },
+      "cob": {
+        "name": "Carbs on Board"
+      },
+      "predicted_bg": {
+        "name": "Predicted BG"
+      },
+      "loop_status": {
+        "name": "Loop Status"
+      },
+      "active_basal_rate": {
+        "name": "Active Basal Rate"
+      },
+      "pump_reservoir": {
+        "name": "Pump Reservoir"
+      },
+      "pump_battery": {
+        "name": "Pump Battery"
+      },
+      "cgm_battery": {
+        "name": "CGM Battery"
+      },
+      "sensor_age": {
+        "name": "Sensor Age"
+      },
+      "time_in_range": {
+        "name": "Time in Range"
       }
     }
   },

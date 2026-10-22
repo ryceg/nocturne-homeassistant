@@ -36,7 +36,7 @@ class NocturneSensorDescription(SensorEntityDescription):
 GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="current_glucose",
-        name="Current Glucose",
+        translation_key="current_glucose",
         device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
         native_unit_of_measurement="mg/dL",
         state_class=SensorStateClass.MEASUREMENT,
@@ -47,7 +47,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="glucose_trend",
-        name="Glucose Trend",
+        translation_key="glucose_trend",
         device_class=SensorDeviceClass.ENUM,
         icon="mdi:trending-up",
         coordinator_key="glucose",
@@ -61,7 +61,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="iob",
-        name="Insulin on Board",
+        translation_key="iob",
         native_unit_of_measurement="U",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:needle",
@@ -71,7 +71,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="cob",
-        name="Carbs on Board",
+        translation_key="cob",
         native_unit_of_measurement="g",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:food-apple",
@@ -81,7 +81,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="predicted_bg",
-        name="Predicted BG",
+        translation_key="predicted_bg",
         device_class=SensorDeviceClass.BLOOD_GLUCOSE_CONCENTRATION,
         native_unit_of_measurement="mg/dL",
         state_class=SensorStateClass.MEASUREMENT,
@@ -92,7 +92,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="loop_status",
-        name="Loop Status",
+        translation_key="loop_status",
         device_class=SensorDeviceClass.ENUM,
         icon="mdi:sync",
         coordinator_key="glucose",
@@ -105,7 +105,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="active_basal_rate",
-        name="Active Basal Rate",
+        translation_key="active_basal_rate",
         native_unit_of_measurement="U/hr",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:iv-bag",
@@ -118,7 +118,7 @@ GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
 DEVICE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="pump_reservoir",
-        name="Pump Reservoir",
+        translation_key="pump_reservoir",
         native_unit_of_measurement="U",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:beaker",
@@ -128,7 +128,7 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="pump_battery",
-        name="Pump Battery",
+        translation_key="pump_battery",
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
@@ -139,7 +139,7 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="cgm_battery",
-        name="CGM Battery",
+        translation_key="cgm_battery",
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
@@ -150,7 +150,7 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="sensor_age",
-        name="Sensor Age",
+        translation_key="sensor_age",
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement="d",
         state_class=SensorStateClass.MEASUREMENT,
@@ -161,7 +161,7 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
     ),
     NocturneSensorDescription(
         key="time_in_range",
-        name="Time in Range",
+        translation_key="time_in_range",
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:target",

@@ -1,6 +1,7 @@
 """Constants for the Nocturne integration."""
 
 DOMAIN = "nocturne"
+DEFAULT_TITLE = "Nocturne"
 
 CONF_INSTANCE_URL = "instance_url"
 CONF_CLIENT_ID = "client_id"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from time import monotonic
 from typing import Any
 
@@ -42,12 +43,15 @@ def _notification_id(excursion_id: str) -> str:
 
 
 class NocturneAlertHandler:
-    def __init__(self, hass: HomeAssistant, notify_services: list[str], instance_name: str) -> None:
+    def __init__(self, hass: HomeAssistant, notify_services: list[str], display_name: Callable[[], str]) -> None:
         self._hass = hass
         self._notify_services = notify_services
-        self._instance_name = instance_name
+        self._display_name = display_name
         self._recent_dispatches: dict[tuple[str, str], float] = {}
         self._open_rule_names: dict[str, str] = {}
+
+    def _title_prefix(self) -> str:
+        return f"Nocturne ({self._display_name()})"
 
     async def handle_alert_dispatch(self, payload: dict[str, Any]) -> None:
         """Handle alert: fire event, persistent notification, mobile push."""
@@ -74,7 +78,7 @@ class NocturneAlertHandler:
         try:
             await self._hass.services.async_call(
                 "persistent_notification", "create",
-                {"title": f"Nocturne: {rule_name}", "message": message, "notification_id": _notification_id(excursion_id)},
+                {"title": f"{self._title_prefix()}: {rule_name}", "message": message, "notification_id": _notification_id(excursion_id)},
             )
         except Exception:
             _LOGGER.exception("Failed to create persistent notification for %s", excursion_id)
@@ -85,7 +89,7 @@ class NocturneAlertHandler:
             try:
                 await self._hass.services.async_call(
                     "notify", service_name,
-                    {"title": f"Nocturne: {rule_name}", "message": message, "data": push_data},
+                    {"title": f"{self._title_prefix()}: {rule_name}", "message": message, "data": push_data},
                 )
             except Exception:
                 _LOGGER.exception("Failed to send push to notify.%s", service_name)
@@ -126,7 +130,7 @@ class NocturneAlertHandler:
             return
         await self._hass.services.async_call(
             "persistent_notification", "create",
-            {"title": f"Nocturne: {rule_name} (Acknowledged)", "message": f"Acknowledged by {acked_by}", "notification_id": _notification_id(excursion_id)},
+            {"title": f"{self._title_prefix()}: {rule_name} (Acknowledged)", "message": f"Acknowledged by {acked_by}", "notification_id": _notification_id(excursion_id)},
         )
 
     def _is_repeat_dispatch(self, excursion_id: str, instance_id: str) -> bool:
