@@ -1,6 +1,9 @@
 """Tests for the SignalR connection manager."""
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+from homeassistant.exceptions import HomeAssistantError
+from websockets.exceptions import ConnectionClosed
 
 from custom_components.nocturne.signalr import NocturneSignalRClient
 
@@ -69,8 +72,70 @@ async def test_handle_unwraps_list(signalr_client):
 
 @pytest.mark.asyncio
 async def test_acknowledge_raises_when_not_connected(signalr_client):
-    with pytest.raises(ConnectionError):
+    with pytest.raises(HomeAssistantError):
         await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["acknowledged", "muted"])
+async def test_acknowledge_returns_when_server_completes(signalr_client, connect_hub, outcome):
+    hub = connect_hub(signalr_client, reply={"result": outcome})
+
+    await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+    assert hub._invocation_handlers == {}
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_raises_on_server_error(signalr_client, connect_hub):
+    hub = connect_hub(signalr_client, reply={"error": "Insufficient scope"})
+
+    with pytest.raises(HomeAssistantError, match="Insufficient scope"):
+        await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+    assert hub._invocation_handlers == {}
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_refusal_tells_the_user_to_reauthenticate(signalr_client, connect_hub):
+    connect_hub(signalr_client, reply={"error": "Acknowledge requires the alerts.readwrite scope."})
+
+    with pytest.raises(HomeAssistantError, match="reauthenticate"):
+        await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_raises_when_excursion_already_closed(signalr_client, connect_hub):
+    connect_hub(signalr_client, reply={"result": "closed"})
+
+    with pytest.raises(HomeAssistantError, match="closed"):
+        await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+
+@pytest.mark.asyncio
+async def test_acknowledge_raises_on_timeout(signalr_client, connect_hub, monkeypatch):
+    monkeypatch.setattr("custom_components.nocturne.signalr.ACKNOWLEDGE_TIMEOUT_SECONDS", 0.01)
+    hub = connect_hub(signalr_client)
+
+    with pytest.raises(HomeAssistantError, match="in time"):
+        await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+    assert hub._invocation_handlers == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "send_error", [RuntimeError("Connection is closed"), ConnectionClosed(None, None)]
+)
+async def test_acknowledge_raises_when_connection_drops_during_send(
+    signalr_client, connect_hub, send_error
+):
+    hub = connect_hub(signalr_client, send_error=send_error)
+
+    with pytest.raises(HomeAssistantError, match="not connected"):
+        await signalr_client.acknowledge("exc-id", "homeassistant:test")
+
+    assert hub._invocation_handlers == {}
 
 
 @pytest.mark.asyncio

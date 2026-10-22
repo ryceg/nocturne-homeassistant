@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError
 from nocturne_py import CreateBolusRequest, CreateCarbIntakeRequest, CreateStateSpanRequest, StateSpanCategory
 
 from custom_components.nocturne import (
@@ -143,7 +144,7 @@ class TestServiceHandlers:
         )
 
     async def test_acknowledge_alert_not_connected(self, mock_hass, mock_api_client):
-        """Test acknowledge_alert logs warning when signalr not connected."""
+        """Test acknowledge_alert raises when signalr not connected."""
         # No signalr_client in hass.data
         mock_hass.services = MagicMock()
         mock_hass.services.has_service.return_value = False
@@ -158,5 +159,26 @@ class TestServiceHandlers:
         call = MagicMock()
         call.data = {"excursion_id": "exc-123"}
 
-        # Should not raise, just log warning and return
-        await handler(call)
+        with pytest.raises(HomeAssistantError):
+            await handler(call)
+
+    async def test_acknowledge_alert_propagates_client_failure(self, mock_hass, mock_api_client):
+        mock_signalr = AsyncMock()
+        mock_signalr.connected = True
+        mock_signalr.acknowledge.side_effect = HomeAssistantError("refused")
+        entry_id = "test_entry_id"
+        mock_hass.data[DOMAIN][entry_id]["signalr_client"] = mock_signalr
+        mock_entry = MagicMock()
+        mock_entry.entry_id = entry_id
+        mock_entry.data = {"client_id": "my-instance"}
+        mock_hass.services = MagicMock()
+        mock_hass.services.has_service.return_value = False
+        _register_services(mock_hass, mock_entry)
+        handler = {c.args[1]: c.args[2] for c in mock_hass.services.async_register.call_args_list}[
+            "acknowledge_alert"
+        ]
+        call = MagicMock()
+        call.data = {"excursion_id": "exc-123"}
+
+        with pytest.raises(HomeAssistantError, match="refused"):
+            await handler(call)

@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.config_entry_oauth2_flow import (
     OAuth2Session,
     async_get_config_entry_implementation,
@@ -32,7 +33,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
-from .signalr import NocturneSignalRClient
+from .signalr import NOT_CONNECTED_MESSAGE, NocturneSignalRClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -234,9 +235,8 @@ def _register_services(hass: HomeAssistant, entry: NocturneConfigEntry | None = 
     async def handle_acknowledge_alert(call: ServiceCall) -> None:
         excursion_id = call.data["excursion_id"]
         signalr_client = hass.data[DOMAIN].get(captured_entry_id, {}).get("signalr_client")
-        if signalr_client is None or not signalr_client.connected:
-            _LOGGER.warning("Cannot acknowledge alert: SignalR not connected")
-            return
+        if signalr_client is None:
+            raise HomeAssistantError(NOT_CONNECTED_MESSAGE)
         await signalr_client.acknowledge(excursion_id, f"homeassistant:{captured_instance_name}")
 
     if not hass.services.has_service(DOMAIN, "acknowledge_alert"):

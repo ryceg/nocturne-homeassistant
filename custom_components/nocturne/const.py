@@ -21,7 +21,7 @@ DEFAULT_SCOPES = [
     "reports.read",
     "heartrate.readwrite",
     "stepcount.readwrite",
-    "alerts.read",
+    "alerts.readwrite",
 ]
 
 CONF_NOTIFY_SERVICES = "notify_services"
