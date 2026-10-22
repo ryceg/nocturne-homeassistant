@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 from nocturne_py import ApiException
 
 from .api import NocturneApiClient
@@ -98,6 +99,6 @@ class DeviceCoordinator(NocturneCoordinator):
             "pump": await self.client.get_latest_pump_snapshot(),
             "uploader": await self.client.get_latest_uploader_snapshot(),
             "profile": await self.client.get_profile_summary(),
-            "daily_summary": await self.client.get_daily_summary(),
+            "daily_summary": await self.client.get_daily_summary(dt_util.now().date()),
             "sensor_age": await self.client.get_sensor_age(),
         }

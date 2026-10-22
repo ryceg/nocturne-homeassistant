@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -91,7 +92,7 @@ class TestGetDailySummaryScope:
             mock_api_cls.return_value.data_overview_get_daily_summary.side_effect = (
                 ApiException(status=403, reason="Forbidden")
             )
-            assert await client.get_daily_summary() is None
+            assert await client.get_daily_summary(TODAY) is None
 
     async def test_other_errors_propagate(self, client):
         with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
@@ -99,4 +100,83 @@ class TestGetDailySummaryScope:
                 ApiException(status=500, reason="Server Error")
             )
             with pytest.raises(ApiException):
-                await client.get_daily_summary()
+                await client.get_daily_summary(TODAY)
+
+
+TODAY = date(2026, 10, 22)
+
+
+def _summary(*days: tuple[str, float]) -> DailySummaryResponse:
+    return DailySummaryResponse(
+        days=[DailySummaryDay(var_date=d, time_in_range_percent=t) for d, t in days]
+    )
+
+
+class TestGetDailySummaryToday:
+    async def test_selects_today_when_it_is_not_the_last_day(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            mock_api_cls.return_value.data_overview_get_daily_summary.return_value = (
+                _summary(("2026-10-21", 60.0), ("2026-10-22", 80.0), ("2026-10-23", 10.0))
+            )
+            day = await client.get_daily_summary(TODAY)
+        assert day.time_in_range_percent == 80.0
+
+    async def test_none_when_latest_day_is_not_today(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            mock_api_cls.return_value.data_overview_get_daily_summary.return_value = (
+                _summary(("2026-10-20", 60.0), ("2026-10-21", 70.0))
+            )
+            assert await client.get_daily_summary(TODAY) is None
+
+    async def test_requests_the_year_of_today(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            api = mock_api_cls.return_value.data_overview_get_daily_summary
+            api.return_value = _summary()
+            await client.get_daily_summary(date(2027, 1, 1))
+        api.assert_called_once_with(year=2027)
+
+    async def test_found_day_is_cached(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            api = mock_api_cls.return_value.data_overview_get_daily_summary
+            api.return_value = _summary(("2026-10-22", 80.0))
+            await client.get_daily_summary(TODAY)
+            await client.get_daily_summary(TODAY)
+        api.assert_called_once()
+
+    async def test_cache_expires_after_thirty_minutes(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            api = mock_api_cls.return_value.data_overview_get_daily_summary
+            api.return_value = _summary(("2026-10-22", 80.0))
+            with patch("custom_components.nocturne.api.time.monotonic") as clock:
+                clock.return_value = 1000.0
+                await client.get_daily_summary(TODAY)
+                clock.return_value = 1000.0 + 31 * 60
+                await client.get_daily_summary(TODAY)
+        assert api.call_count == 2
+
+    async def test_cache_does_not_cross_days(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            api = mock_api_cls.return_value.data_overview_get_daily_summary
+            api.return_value = _summary(("2026-10-22", 80.0), ("2026-10-23", 50.0))
+            await client.get_daily_summary(TODAY)
+            day = await client.get_daily_summary(date(2026, 10, 23))
+        assert day.time_in_range_percent == 50.0
+
+    async def test_missing_day_is_cached_too(self, client):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            api = mock_api_cls.return_value.data_overview_get_daily_summary
+            api.return_value = _summary()
+            await client.get_daily_summary(TODAY)
+            api.return_value = _summary(("2026-10-22", 80.0))
+            day = await client.get_daily_summary(TODAY)
+        assert day is None
+        assert api.call_count == 1
+
+    async def test_forbidden_warns_once(self, client, caplog):
+        with patch("custom_components.nocturne.api.DataOverviewApi") as mock_api_cls:
+            mock_api_cls.return_value.data_overview_get_daily_summary.side_effect = (
+                ApiException(status=403, reason="Forbidden")
+            )
+            await client.get_daily_summary(TODAY)
+            await client.get_daily_summary(TODAY)
+        assert caplog.text.count("reports.read") == 1
