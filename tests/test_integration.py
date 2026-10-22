@@ -19,39 +19,7 @@ from custom_components.nocturne.const import (
     EVENT_NOCTURNE_ALERT_ACKNOWLEDGED,
     EVENT_NOCTURNE_ALERT_RESOLVED,
 )
-
-# ---------------------------------------------------------------------------
-# Sample payloads
-# ---------------------------------------------------------------------------
-
-SAMPLE_ALERT_DISPATCH = {
-    "excursionId": "exc-001",
-    "ruleName": "Urgent Low",
-    "severity": "critical",
-    "glucoseValue": 55,
-    "trend": "SingleDown",
-    "trendRate": -2.0,
-    "readingTimestamp": "2026-05-14T12:00:00Z",
-    "instanceId": "inst-1",
-    "tenantId": "tenant-1",
-    "subjectName": "Test User",
-    "activeExcursionCount": 1,
-    "ackAble": True,
-    "channelId": "chan-1",
-}
-
-SAMPLE_ALERT_RESOLVED = {
-    "excursionId": "exc-001",
-    "ruleName": "Urgent Low",
-    "resolvedAt": "2026-05-14T12:30:00Z",
-}
-
-SAMPLE_ALERT_ACKNOWLEDGED = {
-    "excursionId": "exc-001",
-    "ruleName": "Urgent Low",
-    "acknowledgedBy": "homeassistant:test-hub",
-    "acknowledgedAt": "2026-05-14T12:15:00Z",
-}
+from tests import fixtures
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -107,23 +75,24 @@ class TestFullAlertDispatchFlow:
 
     @pytest.mark.asyncio
     async def test_ha_event_fired_with_correct_data(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         mock_hass.bus.async_fire.assert_called_once()
         event_name, event_data = mock_hass.bus.async_fire.call_args[0]
         assert event_name == EVENT_NOCTURNE_ALERT
-        assert event_data["excursion_id"] == "exc-001"
+        assert event_data["excursion_id"] == fixtures.EXCURSION_ID
         assert event_data["rule_name"] == "Urgent Low"
         assert event_data["severity"] == "critical"
         assert event_data["glucose_value"] == 55
-        assert event_data["trend"] == "SingleDown"
-        assert event_data["ack_able"] is True
-        assert event_data["channel_id"] == "chan-1"
+        assert event_data["trend"] is None
         assert event_data["fired_at"] == "2026-05-14T12:00:00Z"
+        assert set(event_data) == {
+            "excursion_id", "rule_name", "severity", "message", "glucose_value", "trend", "fired_at",
+        }
 
     @pytest.mark.asyncio
     async def test_persistent_notification_created(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         calls = mock_hass.services.async_call.call_args_list
         pn_calls = [c for c in calls if c[0][0] == "persistent_notification"]
@@ -132,11 +101,11 @@ class TestFullAlertDispatchFlow:
         service_data = pn_calls[0][0][2]
         assert "Urgent Low" in service_data["title"]
         assert "55" in service_data["message"]
-        assert service_data["notification_id"] == "nocturne_alert_exc-001"
+        assert service_data["notification_id"] == f"nocturne_alert_{fixtures.EXCURSION_ID}"
 
     @pytest.mark.asyncio
     async def test_mobile_push_sent(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         calls = mock_hass.services.async_call.call_args_list
         notify_calls = [c for c in calls if c[0][0] == "notify"]
@@ -145,7 +114,7 @@ class TestFullAlertDispatchFlow:
 
     @pytest.mark.asyncio
     async def test_critical_severity_push_metadata(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         calls = mock_hass.services.async_call.call_args_list
         notify_calls = [c for c in calls if c[0][0] == "notify"]
@@ -155,7 +124,7 @@ class TestFullAlertDispatchFlow:
     @pytest.mark.asyncio
     async def test_all_three_services_called(self, single_notify_handler, mock_hass):
         """Dispatch should produce exactly 3 service calls: persistent_notification + notify."""
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         calls = mock_hass.services.async_call.call_args_list
         domains_called = [c[0][0] for c in calls]
@@ -174,24 +143,24 @@ class TestAlertResolvedFlow:
 
     @pytest.mark.asyncio
     async def test_resolved_event_fired(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_resolved(SAMPLE_ALERT_RESOLVED)
+        await single_notify_handler.handle_alert_resolved(fixtures.alert_resolved())
 
         mock_hass.bus.async_fire.assert_called_once()
         event_name, event_data = mock_hass.bus.async_fire.call_args[0]
         assert event_name == EVENT_NOCTURNE_ALERT_RESOLVED
-        assert event_data["excursion_id"] == "exc-001"
-        assert event_data["rule_name"] == "Urgent Low"
+        assert event_data["excursion_id"] == fixtures.EXCURSION_ID
+        assert "rule_name" not in event_data
         assert event_data["resolved_at"] == "2026-05-14T12:30:00Z"
 
     @pytest.mark.asyncio
     async def test_persistent_notification_dismissed(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_resolved(SAMPLE_ALERT_RESOLVED)
+        await single_notify_handler.handle_alert_resolved(fixtures.alert_resolved())
 
         calls = mock_hass.services.async_call.call_args_list
         pn_calls = [c for c in calls if c[0][0] == "persistent_notification"]
         assert len(pn_calls) == 1
         assert pn_calls[0][0][1] == "dismiss"
-        assert pn_calls[0][0][2]["notification_id"] == "nocturne_alert_exc-001"
+        assert pn_calls[0][0][2]["notification_id"] == f"nocturne_alert_{fixtures.EXCURSION_ID}"
 
 
 # ---------------------------------------------------------------------------
@@ -203,28 +172,31 @@ class TestAlertAcknowledgedFlow:
 
     @pytest.mark.asyncio
     async def test_acknowledged_event_fired(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_acknowledged(SAMPLE_ALERT_ACKNOWLEDGED)
+        await single_notify_handler.handle_alert_acknowledged(fixtures.alert_acknowledged_for_excursion())
 
         mock_hass.bus.async_fire.assert_called_once()
         event_name, event_data = mock_hass.bus.async_fire.call_args[0]
         assert event_name == EVENT_NOCTURNE_ALERT_ACKNOWLEDGED
-        assert event_data["excursion_id"] == "exc-001"
-        assert event_data["rule_name"] == "Urgent Low"
+        assert event_data["excursion_id"] == fixtures.EXCURSION_ID
+        assert "rule_name" not in event_data
         assert event_data["acknowledged_by"] == "homeassistant:test-hub"
         assert event_data["acknowledged_at"] == "2026-05-14T12:15:00Z"
 
     @pytest.mark.asyncio
     async def test_notification_updated_with_ack_info(self, single_notify_handler, mock_hass):
-        await single_notify_handler.handle_alert_acknowledged(SAMPLE_ALERT_ACKNOWLEDGED)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
+        mock_hass.services.async_call.reset_mock()
+
+        await single_notify_handler.handle_alert_acknowledged(fixtures.alert_acknowledged_for_excursion())
 
         calls = mock_hass.services.async_call.call_args_list
         pn_calls = [c for c in calls if c[0][0] == "persistent_notification"]
         assert len(pn_calls) == 1
         assert pn_calls[0][0][1] == "create"
         service_data = pn_calls[0][0][2]
-        assert "(Acknowledged)" in service_data["title"]
+        assert service_data["title"] == "Nocturne: Urgent Low (Acknowledged)"
         assert "homeassistant:test-hub" in service_data["message"]
-        assert service_data["notification_id"] == "nocturne_alert_exc-001"
+        assert service_data["notification_id"] == f"nocturne_alert_{fixtures.EXCURSION_ID}"
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +253,9 @@ class TestAcknowledgeServiceFlow:
 
         hub._transport.send = recording_send
 
-        await signalr_client.acknowledge("exc-001", "homeassistant:test-hub")
+        await signalr_client.acknowledge(fixtures.EXCURSION_ID, "homeassistant:test-hub")
 
-        assert sent == [("Acknowledge", ["exc-001", "homeassistant:test-hub"])]
+        assert sent == [("Acknowledge", [fixtures.EXCURSION_ID, "homeassistant:test-hub"])]
 
     @pytest.mark.asyncio
     async def test_acknowledge_raises_when_disconnected(self, mock_hass):
@@ -298,7 +270,7 @@ class TestAcknowledgeServiceFlow:
             on_alert_acknowledged=AsyncMock(),
         )
         with pytest.raises(HomeAssistantError):
-            await signalr_client.acknowledge("exc-001", "homeassistant:test-hub")
+            await signalr_client.acknowledge(fixtures.EXCURSION_ID, "homeassistant:test-hub")
 
 
 # ---------------------------------------------------------------------------
@@ -311,12 +283,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_without_glucose_value(self, single_notify_handler, mock_hass):
         """Alert dispatch with no glucose value should still work."""
-        payload = {
-            "excursionId": "exc-002",
-            "ruleName": "Connection Lost",
-            "severity": "warning",
-            "readingTimestamp": "2026-05-14T12:00:00Z",
-        }
+        payload = fixtures.alert_dispatch_without_reading()
         await single_notify_handler.handle_alert_dispatch(payload)
 
         # Event fired
@@ -336,7 +303,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_with_no_notify_services(self, no_notify_handler, mock_hass):
         """With no notify services, event + persistent notification still fire."""
-        await no_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await no_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         # Event fired
         mock_hass.bus.async_fire.assert_called_once()
@@ -353,7 +320,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_with_multiple_notify_services(self, multi_notify_handler, mock_hass):
         """Multiple notify services should each receive a push."""
-        await multi_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await multi_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         calls = mock_hass.services.async_call.call_args_list
         notify_calls = [c for c in calls if c[0][0] == "notify"]
@@ -364,7 +331,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_warning_severity_push_level(self, single_notify_handler, mock_hass):
         """Warning severity should map to time-sensitive push."""
-        payload = {**SAMPLE_ALERT_DISPATCH, "severity": "warning"}
+        payload = fixtures.alert_dispatch(severity="warning")
         await single_notify_handler.handle_alert_dispatch(payload)
 
         calls = mock_hass.services.async_call.call_args_list
@@ -375,7 +342,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_info_severity_push_level(self, single_notify_handler, mock_hass):
         """Info severity should map to active push."""
-        payload = {**SAMPLE_ALERT_DISPATCH, "severity": "info"}
+        payload = fixtures.alert_dispatch(severity="info")
         await single_notify_handler.handle_alert_dispatch(payload)
 
         calls = mock_hass.services.async_call.call_args_list
@@ -386,7 +353,7 @@ class TestEdgeCases:
     @pytest.mark.asyncio
     async def test_dispatch_unknown_severity_defaults_to_active(self, single_notify_handler, mock_hass):
         """Unknown severity should default to active push level."""
-        payload = {**SAMPLE_ALERT_DISPATCH, "severity": "banana"}
+        payload = fixtures.alert_dispatch(severity="banana")
         await single_notify_handler.handle_alert_dispatch(payload)
 
         calls = mock_hass.services.async_call.call_args_list
@@ -395,13 +362,23 @@ class TestEdgeCases:
         assert push_data["push"]["interruption-level"] == "active"
 
     @pytest.mark.asyncio
+    async def test_message_with_null_trend_has_no_trend_text(self, single_notify_handler, mock_hass):
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
+
+        message = mock_hass.services.async_call.call_args_list[0][0][2]["message"]
+        assert message == "Urgent Low: Glucose is 55 mg/dL"
+
+    @pytest.mark.asyncio
+    async def test_message_with_trend_appends_it(self, single_notify_handler, mock_hass):
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch(trend="SingleDown"))
+
+        message = mock_hass.services.async_call.call_args_list[0][0][2]["message"]
+        assert message == "Urgent Low: Glucose is 55 mg/dL SingleDown"
+
+    @pytest.mark.asyncio
     async def test_message_without_glucose_is_just_rule_name(self, single_notify_handler, mock_hass):
         """When no glucose value, message should be just the rule name."""
-        payload = {
-            "excursionId": "exc-003",
-            "ruleName": "Sensor Expired",
-            "severity": "info",
-        }
+        payload = fixtures.alert_dispatch_without_reading(ruleName="Sensor Expired", severity="info")
         await single_notify_handler.handle_alert_dispatch(payload)
 
         calls = mock_hass.services.async_call.call_args_list
@@ -421,7 +398,7 @@ class TestFullLifecycle:
     async def test_dispatch_then_acknowledge_then_resolve(self, single_notify_handler, mock_hass):
         """Walk an alert through its entire lifecycle."""
         # Step 1: Dispatch
-        await single_notify_handler.handle_alert_dispatch(SAMPLE_ALERT_DISPATCH)
+        await single_notify_handler.handle_alert_dispatch(fixtures.alert_dispatch())
 
         assert mock_hass.bus.async_fire.call_count == 1
         assert mock_hass.bus.async_fire.call_args[0][0] == EVENT_NOCTURNE_ALERT
@@ -430,7 +407,7 @@ class TestFullLifecycle:
         mock_hass.bus.async_fire.reset_mock()
         mock_hass.services.async_call.reset_mock()
 
-        await single_notify_handler.handle_alert_acknowledged(SAMPLE_ALERT_ACKNOWLEDGED)
+        await single_notify_handler.handle_alert_acknowledged(fixtures.alert_acknowledged_for_excursion())
 
         assert mock_hass.bus.async_fire.call_count == 1
         assert mock_hass.bus.async_fire.call_args[0][0] == EVENT_NOCTURNE_ALERT_ACKNOWLEDGED
@@ -447,7 +424,7 @@ class TestFullLifecycle:
         mock_hass.bus.async_fire.reset_mock()
         mock_hass.services.async_call.reset_mock()
 
-        await single_notify_handler.handle_alert_resolved(SAMPLE_ALERT_RESOLVED)
+        await single_notify_handler.handle_alert_resolved(fixtures.alert_resolved())
 
         assert mock_hass.bus.async_fire.call_count == 1
         assert mock_hass.bus.async_fire.call_args[0][0] == EVENT_NOCTURNE_ALERT_RESOLVED
@@ -479,7 +456,7 @@ class TestFullLifecycle:
         )
 
         # Simulate SignalR delivering an alert (wrapped in list as SignalR does)
-        await signalr_client._handle_alert_dispatch([SAMPLE_ALERT_DISPATCH])
+        await signalr_client._handle_alert_dispatch([fixtures.alert_dispatch()])
 
         # Verify the full chain executed
         mock_hass.bus.async_fire.assert_called_once()
