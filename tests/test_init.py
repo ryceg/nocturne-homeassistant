@@ -22,7 +22,7 @@ from custom_components.nocturne.const import (
     missing_scopes,
 )
 
-from .conftest import make_entry, set_up
+from .conftest import TOKEN_URL, issue_tokens, make_entry, set_up
 
 
 def _token_requests(aioclient_mock: AiohttpClientMocker) -> dict[str, dict]:
@@ -41,7 +41,7 @@ def setup_hass(hass: HomeAssistant, enable_custom_integrations: None):
     with (
         patch("custom_components.nocturne.GlucoseCoordinator", side_effect=coordinator),
         patch("custom_components.nocturne.DeviceCoordinator", side_effect=coordinator),
-        patch("custom_components.nocturne.NocturneSignalRClient", return_value=AsyncMock()),
+        patch("custom_components.nocturne.NocturneSignalRClient", return_value=MagicMock()),
         patch("custom_components.nocturne.PLATFORMS", []),
     ):
         yield hass
@@ -76,20 +76,28 @@ class TestTokenRefreshPerEntry:
 
 
 class TestOauthTokenProvider:
-    async def test_each_call_refreshes_and_returns_the_current_token(self):
-        oauth_session = MagicMock()
-        oauth_session.token = {"access_token": "expired"}
-        refreshed = iter(["fresh-1", "fresh-2"])
-
-        async def _refresh() -> None:
-            oauth_session.token = {"access_token": next(refreshed)}
-
-        oauth_session.async_ensure_token_valid = AsyncMock(side_effect=_refresh)
+    async def test_a_token_that_is_due_is_refreshed_on_every_call(
+        self, oauth_session, aioclient_mock: AiohttpClientMocker
+    ):
+        issue_tokens(aioclient_mock, "fresh-1", "fresh-2", expires_in=0)
         get_token = oauth_token_provider(oauth_session)
 
         assert await get_token() == "fresh-1"
         assert await get_token() == "fresh-2"
-        assert oauth_session.async_ensure_token_valid.await_count == 2
+
+        assert list(_token_requests(aioclient_mock)) == [TOKEN_URL]
+        assert len(aioclient_mock.mock_calls) == 2
+
+    async def test_a_token_that_is_still_valid_is_reused(
+        self, oauth_session, aioclient_mock: AiohttpClientMocker
+    ):
+        issue_tokens(aioclient_mock, "fresh-1", "fresh-2", expires_in=3600)
+        get_token = oauth_token_provider(oauth_session)
+
+        assert await get_token() == "fresh-1"
+        assert await get_token() == "fresh-1"
+
+        assert len(aioclient_mock.mock_calls) == 1
 
 
 class TestEntryLifecycle:
@@ -168,52 +176,43 @@ class TestInstanceNaming:
 
 
 class TestScopeReauth:
-    @pytest.fixture
-    async def scope_hass(self, reauth_hass, mock_api_client):
-        with (
-            patch("custom_components.nocturne.NocturneApiClient", return_value=mock_api_client),
-            patch("custom_components.nocturne.NocturneSignalRClient"),
-        ):
-            yield reauth_hass
-
     async def _set_up(self, hass, scope, **data):
         entry = make_entry(expires_in=3600, **data)
         entry.data["token"]["scope"] = scope
-        entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(entry.entry_id)
-        await hass.async_block_till_done()
-        assert entry.state is ConfigEntryState.LOADED
+        await set_up(hass, entry)
         return entry
 
-    async def test_old_entry_with_a_narrower_grant_starts_reauth(self, scope_hass):
+    async def test_old_entry_with_a_narrower_grant_starts_reauth(self, reauth_hass, stubs):
         granted = " ".join(s for s in DEFAULT_SCOPES if s != "reports.read")
 
-        entry = await self._set_up(scope_hass, granted)
+        entry = await self._set_up(reauth_hass, granted)
 
-        flows = scope_hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        flows = reauth_hass.config_entries.flow.async_progress_by_handler(DOMAIN)
         assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
         assert flows[0]["context"]["entry_id"] == entry.entry_id
 
-    async def test_entry_asked_for_every_scope_starts_no_reauth_on_a_capped_grant(self, scope_hass):
+    async def test_entry_asked_for_every_scope_starts_no_reauth_on_a_capped_grant(
+        self, reauth_hass, stubs
+    ):
         await self._set_up(
-            scope_hass, "glucose.readwrite", **{CONF_REQUESTED_SCOPES: list(DEFAULT_SCOPES)}
+            reauth_hass, "glucose.readwrite", **{CONF_REQUESTED_SCOPES: list(DEFAULT_SCOPES)}
         )
 
-        assert scope_hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+        assert reauth_hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
-    async def test_entry_asked_before_a_scope_was_added_starts_reauth(self, scope_hass):
+    async def test_entry_asked_before_a_scope_was_added_starts_reauth(self, reauth_hass, stubs):
         asked = [s for s in DEFAULT_SCOPES if s != "alerts.readwrite"]
 
-        await self._set_up(scope_hass, " ".join(DEFAULT_SCOPES), **{CONF_REQUESTED_SCOPES: asked})
+        await self._set_up(reauth_hass, " ".join(DEFAULT_SCOPES), **{CONF_REQUESTED_SCOPES: asked})
 
-        flows = scope_hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+        flows = reauth_hass.config_entries.flow.async_progress_by_handler(DOMAIN)
         assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
 
     @pytest.mark.parametrize("scope", [" ".join(DEFAULT_SCOPES), None])
-    async def test_full_or_unknown_grant_starts_no_reauth(self, scope_hass, scope):
-        await self._set_up(scope_hass, scope)
+    async def test_full_or_unknown_grant_starts_no_reauth(self, reauth_hass, stubs, scope):
+        await self._set_up(reauth_hass, scope)
 
-        assert scope_hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+        assert reauth_hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
 
 
 class TestMissingScopes:

@@ -8,12 +8,11 @@ from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.config_entry_oauth2_flow import OAuth2Session
 from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pysignalr.client import SignalRClient
-from pysignalr.messages import CompletionMessage
 from nocturne_py import (
     ApsSnapshot,
     DeviceAgeInfo,
@@ -23,7 +22,16 @@ from nocturne_py import (
     UploaderSnapshot,
 )
 from nocturne_py.models import DailySummaryDay, ProfileSummary
+from pysignalr.client import SignalRClient
+from pysignalr.messages import CompletionMessage
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
 
+from custom_components.nocturne.alert_handler import NocturneAlertHandler
+from custom_components.nocturne.config_flow import NocturneOAuth2Implementation
 from custom_components.nocturne.const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
@@ -31,6 +39,7 @@ from custom_components.nocturne.const import (
     CONF_TOKEN_URL,
     DOMAIN,
 )
+from custom_components.nocturne.signalr import NocturneSignalRClient
 
 INSTANCE_URL = "https://nocturne.example.com"
 AUTHORIZE_URL = f"{INSTANCE_URL}/oauth/authorize"
@@ -44,17 +53,21 @@ def make_entry(
     unique_id: str | None = None,
     expires_in: float = -10,
     title: str = "Nocturne",
+    access_token: str = "old-access",
+    refresh_token: str | None = None,
+    options: dict | None = None,
     **data: object,
 ) -> MockConfigEntry:
     return MockConfigEntry(
         domain=DOMAIN,
         title=title,
         unique_id=unique_id or instance_url,
+        options=options or {},
         data={
             "auth_implementation": DOMAIN,
             "token": {
-                "access_token": "old-access",
-                "refresh_token": f"refresh-{client_id}",
+                "access_token": access_token,
+                "refresh_token": refresh_token or f"refresh-{client_id}",
                 "expires_at": time.time() + expires_in,
                 "expires_in": 3600,
             },
@@ -65,6 +78,31 @@ def make_entry(
             **data,
         },
     )
+
+
+@pytest.fixture
+def entry(hass: HomeAssistant) -> MockConfigEntry:
+    """An entry in HA that has not been set up, whose token is due for refresh."""
+    entry = make_entry()
+    entry.add_to_hass(hass)
+    return entry
+
+
+@pytest.fixture
+def oauth_session(hass: HomeAssistant, entry: MockConfigEntry) -> OAuth2Session:
+    return OAuth2Session(hass, entry, NocturneOAuth2Implementation.from_entry_data(hass, entry.data))
+
+
+def issue_tokens(aioclient_mock: AiohttpClientMocker, *tokens: str, expires_in: int) -> None:
+    """Answer each refresh at the token endpoint with the next access token."""
+    issued = iter(tokens)
+
+    async def respond(method, url, data):
+        return AiohttpClientMockResponse(
+            method, url, json={"access_token": next(issued), "expires_in": expires_in}
+        )
+
+    aioclient_mock.post(TOKEN_URL, side_effect=respond)
 
 
 @pytest.fixture
@@ -80,25 +118,6 @@ async def my_hass(hass: HomeAssistant, enable_custom_integrations: None) -> Home
     hass.config.components.add("my")
     assert await async_setup_component(hass, "auth", {})
     return hass
-
-
-@pytest.fixture
-def glucose_data() -> dict:
-    """Realistic glucose coordinator data using SDK models."""
-    return {
-        "glucose": SensorGlucose(
-            mgdl=120,
-            direction=GlucoseDirection("Flat"),
-            mills=1700000000000,
-        ),
-        "aps": ApsSnapshot(
-            iob=1.5,
-            cob=20,
-            enacted_rate=0.8,
-            eventual_bg=110,
-            enacted=True,
-        ),
-    }
 
 
 def make_api_client() -> AsyncMock:
@@ -124,11 +143,6 @@ def make_api_client() -> AsyncMock:
     return client
 
 
-@pytest.fixture
-def mock_api_client() -> AsyncMock:
-    return make_api_client()
-
-
 @dataclass
 class Stubs:
     """The API and SignalR clients each set-up entry was given, keyed by instance URL."""
@@ -145,8 +159,10 @@ def stubs(reauth_hass: HomeAssistant) -> Stubs:
     def api_client(base_url: str, **_: object) -> AsyncMock:
         return created.clients.setdefault(base_url, make_api_client())
 
-    def signalr_client(*, instance_url: str, **_: object) -> MagicMock:
+    def signalr_client(*, instance_url: str, **callbacks: object) -> MagicMock:
         client = MagicMock()
+        client.connected = True
+        client.callbacks = callbacks
         client.stop = AsyncMock()
         client.acknowledge = AsyncMock()
         created.signalr[instance_url] = client
@@ -168,13 +184,65 @@ async def set_up(hass: HomeAssistant, *entries: MockConfigEntry) -> None:
     assert [entry.state for entry in entries] == [ConfigEntryState.LOADED] * len(entries)
 
 
+def make_signalr_client(hass: HomeAssistant, **overrides: object) -> NocturneSignalRClient:
+    """A real SignalR client whose callbacks are AsyncMocks unless overridden."""
+    arguments: dict[str, object] = {
+        "hass": hass,
+        "instance_url": INSTANCE_URL,
+        "instance_id": "test-client-id",
+        "async_get_token": AsyncMock(return_value="test-token"),
+        "on_glucose_reading": AsyncMock(),
+        "on_alert_dispatch": AsyncMock(),
+        "on_alert_resolved": AsyncMock(),
+        "on_alert_acknowledged": AsyncMock(),
+    }
+    return NocturneSignalRClient(**{**arguments, **overrides})
+
+
+async def deliver(client: NocturneSignalRClient, event: str, payload: object) -> None:
+    """Hand a server event to the handler the client registers for it with pysignalr."""
+    handlers: dict[str, object] = {}
+
+    class Hub:
+        def on(self, name: str, handler: object) -> None:
+            handlers[name] = handler
+
+    client._subscribe_events(Hub())
+    await handlers[event](payload)
+
+
+def make_alert_handler(hass: HomeAssistant, *notify_services: str) -> NocturneAlertHandler:
+    return NocturneAlertHandler(hass, list(notify_services), lambda: "test-hub")
+
+
+class Notifications:
+    """The persistent notifications open in HA, and every one that was created or dismissed."""
+
+    def __init__(self) -> None:
+        self.open: dict[str, persistent_notification.Notification] = {}
+        self.created: list[persistent_notification.Notification] = []
+        self.dismissed: list[str] = []
+
+    def record(
+        self,
+        update_type: persistent_notification.UpdateType,
+        notifications: dict[str, persistent_notification.Notification],
+    ) -> None:
+        if update_type is persistent_notification.UpdateType.ADDED:
+            self.open.update(notifications)
+            self.created.extend(notifications.values())
+        elif update_type is persistent_notification.UpdateType.REMOVED:
+            for notification_id in notifications:
+                self.open.pop(notification_id, None)
+                self.dismissed.append(notification_id)
+
+
 @pytest.fixture
-def mock_glucose_coordinator(glucose_data: dict) -> MagicMock:
-    """MagicMock glucose coordinator with fixture data."""
-    coordinator = MagicMock()
-    coordinator.data = glucose_data
-    coordinator.last_update_success = True
-    return coordinator
+async def notifications(hass: HomeAssistant) -> Notifications:
+    assert await async_setup_component(hass, "persistent_notification", {})
+    seen = Notifications()
+    persistent_notification.async_register_callback(hass, seen.record)
+    return seen
 
 
 @pytest.fixture
@@ -187,7 +255,10 @@ def connect_hub():
     def connect(client, reply=None, send_error=None):
         hub = SignalRClient("https://nocturne.example.com/hubs/home-assistant")
 
+        sent = []
+
         async def transport_send(message):
+            sent.append((message.target, message.arguments))
             if send_error is not None:
                 raise send_error
             if reply is not None:
@@ -197,6 +268,7 @@ def connect_hub():
                 )
 
         hub._transport.send = transport_send
+        hub.sent = sent
         client._client = hub
         client._connected = True
         return hub

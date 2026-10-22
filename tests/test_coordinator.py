@@ -1,205 +1,181 @@
-"""Tests for GlucoseCoordinator and DeviceCoordinator."""
+"""How polling failures surface: unavailable entities, retries, and reauthentication."""
 
 from __future__ import annotations
 
-import time
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-from aiohttp import ClientConnectionError, ClientResponseError
+from aiohttp import ClientConnectionError, ClientResponseError, RequestInfo
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
-from homeassistant.helpers.update_coordinator import UpdateFailed
 from homeassistant.util import dt as dt_util
-from nocturne_py import ApiException, ApsSnapshot, PumpSnapshot, SensorGlucose, UploaderSnapshot
-from nocturne_py.models import DailySummaryDay, DeviceAgeInfo, ProfileSummary
+from multidict import CIMultiDict, CIMultiDictProxy
+from nocturne_py import ApiException
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
+from yarl import URL
 
-from custom_components.nocturne.const import (
-    CONF_AUTHORIZE_URL,
-    CONF_CLIENT_ID,
-    CONF_INSTANCE_URL,
-    CONF_TOKEN_URL,
-    DOMAIN,
+from custom_components.nocturne.const import DOMAIN
+
+from .conftest import INSTANCE_URL, TOKEN_URL, Stubs, make_api_client, make_entry, set_up
+
+COORDINATORS = pytest.mark.parametrize(
+    ("coordinator", "method", "entity_id", "state"),
+    [
+        ("glucose_coordinator", "get_latest_glucose", "sensor.nocturne_current_glucose", "120"),
+        ("device_coordinator", "get_latest_pump_snapshot", "sensor.nocturne_pump_reservoir", "150.0"),
+    ],
+    ids=["glucose", "device"],
 )
-from custom_components.nocturne.coordinator import (
-    DeviceCoordinator,
-    GlucoseCoordinator,
-)
-
-TOKEN_URL = "https://nocturne.example.com/oauth/token"
 
 
-def _make_api_exception(status: int) -> ApiException:
+def api_error(status: int) -> ApiException:
     return ApiException(status=status, reason=f"HTTP {status}")
 
 
-@pytest.fixture
-def mock_client() -> AsyncMock:
-    client = AsyncMock()
-    client.get_latest_glucose.return_value = SensorGlucose(mgdl=120)
-    client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=1.5)
-    client.get_latest_pump_snapshot.return_value = PumpSnapshot(reservoir=150.0)
-    client.get_latest_uploader_snapshot.return_value = UploaderSnapshot(battery=90)
-    client.get_profile_summary.return_value = ProfileSummary()
-    client.get_daily_summary.return_value = DailySummaryDay(time_in_range_percent=72.5)
-    client.get_sensor_age.return_value = DeviceAgeInfo(days=5)
-    return client
+def refresh_error(status: int) -> ClientResponseError:
+    request_info = RequestInfo(
+        url=URL(TOKEN_URL),
+        method="POST",
+        headers=CIMultiDictProxy(CIMultiDict()),
+        real_url=URL(TOKEN_URL),
+    )
+    return ClientResponseError(request_info, (), status=status)
+
+
+def reauth_sources(hass: HomeAssistant) -> list[str]:
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    return [flow["context"]["source"] for flow in flows]
 
 
 @pytest.fixture
-def mock_hass() -> MagicMock:
-    hass = MagicMock()
-    hass.loop = None
-    return hass
+async def entry(reauth_hass: HomeAssistant, stubs: Stubs) -> MockConfigEntry:
+    entry = make_entry(expires_in=3600)
+    await set_up(reauth_hass, entry)
+    return entry
 
 
-class TestGlucoseCoordinator:
-    async def test_success(self, mock_hass, mock_client):
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        result = await coord._async_update_data()
-        assert result["glucose"].mgdl == 120
-        assert result["aps"].iob == 1.5
-        assert coord._refresh_failed is False
-
-    async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="Auth failed"):
-            await coord._async_update_data()
-        assert coord._refresh_failed is True
-
-    async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_glucose.side_effect = _make_api_exception(401)
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        coord._refresh_failed = True
-        with pytest.raises(ConfigEntryAuthFailed, match="OAuth token expired"):
-            await coord._async_update_data()
-
-    async def test_other_http_error_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_glucose.side_effect = _make_api_exception(500)
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="API error: 500"):
-            await coord._async_update_data()
-
-    async def test_generic_exception_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_glucose.side_effect = OSError("DNS failure")
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="Error fetching data"):
-            await coord._async_update_data()
-
-    async def test_glucose_push_requests_refresh(self, mock_hass, mock_client):
-        """A pushed glucose_reading triggers a poll instead of replacing the data."""
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        coord.async_request_refresh = AsyncMock()
-
-        await coord.async_handle_glucose_push()
-
-        coord.async_request_refresh.assert_awaited_once()
-
-    async def test_polls_after_glucose_push(self, mock_hass, mock_client):
-        """Polling is never paused by SignalR: APS state is not pushed."""
-        coord = GlucoseCoordinator(mock_hass, MagicMock(), mock_client)
-        coord.async_request_refresh = AsyncMock()
-        await coord.async_handle_glucose_push()
-
-        mock_client.get_latest_glucose.return_value = SensorGlucose(mgdl=120)
-        mock_client.get_latest_aps_snapshot.return_value = ApsSnapshot(iob=1.5)
-
-        result = await coord._async_update_data()
-
-        mock_client.get_latest_glucose.assert_called_once()
-        assert result["glucose"].mgdl == 120
+async def refresh(hass: HomeAssistant, entry: MockConfigEntry, coordinator: str) -> None:
+    await getattr(entry.runtime_data, coordinator).async_refresh()
+    await hass.async_block_till_done()
 
 
-class TestDeviceCoordinator:
-    async def test_success(self, mock_hass, mock_client):
-        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
-        result = await coord._async_update_data()
-        assert result["pump"].reservoir == 150.0
-        assert result["uploader"].battery == 90
-        assert result["daily_summary"].time_in_range_percent == 72.5
-        mock_client.get_daily_summary.assert_called_once_with(dt_util.now().date())
-        assert result["sensor_age"].days == 5
-
-    async def test_401_first_attempt_raises_update_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
-        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="Auth failed"):
-            await coord._async_update_data()
-
-    async def test_401_second_attempt_raises_auth_failed(self, mock_hass, mock_client):
-        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(401)
-        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
-        coord._refresh_failed = True
-        with pytest.raises(ConfigEntryAuthFailed):
-            await coord._async_update_data()
-
-    async def test_other_http_error(self, mock_hass, mock_client):
-        mock_client.get_latest_pump_snapshot.side_effect = _make_api_exception(503)
-        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="API error: 503"):
-            await coord._async_update_data()
-
-    async def test_generic_exception(self, mock_hass, mock_client):
-        mock_client.get_latest_pump_snapshot.side_effect = RuntimeError("boom")
-        coord = DeviceCoordinator(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed, match="Error fetching data"):
-            await coord._async_update_data()
-
-
-def _refresh_error(status: int) -> ClientResponseError:
-    return ClientResponseError(MagicMock(), (), status=status)
-
-
-@pytest.mark.parametrize("coordinator_cls", [GlucoseCoordinator, DeviceCoordinator])
-class TestRefusedTokenRefresh:
-    @pytest.mark.parametrize("status", [400, 401, 403])
-    async def test_refused_refresh_raises_auth_failed(
-        self, mock_hass, mock_client, coordinator_cls, status
+@COORDINATORS
+class TestPollingFailures:
+    @pytest.mark.parametrize(
+        "error",
+        [api_error(500), api_error(503), OSError("DNS failure"), RuntimeError("boom")],
+        ids=["500", "503", "network", "unexpected"],
+    )
+    async def test_an_error_makes_the_entities_unavailable_without_reauth(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state, error
     ):
-        mock_client.get_latest_glucose.side_effect = _refresh_error(status)
-        mock_client.get_latest_pump_snapshot.side_effect = _refresh_error(status)
-        coord = coordinator_cls(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(ConfigEntryAuthFailed):
-            await coord._async_update_data()
+        getattr(stubs.clients[INSTANCE_URL], method).side_effect = error
+
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_hass.states.get(entity_id).state == STATE_UNAVAILABLE
+        assert reauth_sources(reauth_hass) == []
+        assert entry.state is ConfigEntryState.LOADED
+
+    async def test_the_entities_recover_when_the_server_does(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state
+    ):
+        client = stubs.clients[INSTANCE_URL]
+        getattr(client, method).side_effect = api_error(500)
+        await refresh(reauth_hass, entry, coordinator)
+
+        getattr(client, method).side_effect = None
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_hass.states.get(entity_id).state == state
+
+    async def test_one_unauthorised_response_is_retried_before_reauth(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state
+    ):
+        getattr(stubs.clients[INSTANCE_URL], method).side_effect = api_error(401)
+
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_hass.states.get(entity_id).state == STATE_UNAVAILABLE
+        assert reauth_sources(reauth_hass) == []
+
+    async def test_a_second_unauthorised_response_in_a_row_starts_reauth(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state
+    ):
+        getattr(stubs.clients[INSTANCE_URL], method).side_effect = api_error(401)
+
+        await refresh(reauth_hass, entry, coordinator)
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_sources(reauth_hass) == [SOURCE_REAUTH]
+
+    async def test_a_success_between_unauthorised_responses_forgives_the_first(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state
+    ):
+        endpoint = getattr(stubs.clients[INSTANCE_URL], method)
+        endpoint.side_effect = api_error(401)
+        await refresh(reauth_hass, entry, coordinator)
+        endpoint.side_effect = None
+        await refresh(reauth_hass, entry, coordinator)
+
+        endpoint.side_effect = api_error(401)
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_sources(reauth_hass) == []
+
+    @pytest.mark.parametrize("status", [400, 401, 403])
+    async def test_a_refused_token_refresh_starts_reauth_at_once(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state, status
+    ):
+        getattr(stubs.clients[INSTANCE_URL], method).side_effect = refresh_error(status)
+
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_sources(reauth_hass) == [SOURCE_REAUTH]
 
     @pytest.mark.parametrize(
         "error",
-        [_refresh_error(429), _refresh_error(500), _refresh_error(503), ClientConnectionError()],
+        [refresh_error(429), refresh_error(500), refresh_error(503), ClientConnectionError()],
+        ids=["429", "500", "503", "connection"],
     )
-    async def test_server_and_network_errors_stay_retryable(
-        self, mock_hass, mock_client, coordinator_cls, error
+    async def test_a_server_or_network_failure_refreshing_the_token_is_retried(
+        self, reauth_hass, stubs, entry, coordinator, method, entity_id, state, error
     ):
-        mock_client.get_latest_glucose.side_effect = error
-        mock_client.get_latest_pump_snapshot.side_effect = error
-        coord = coordinator_cls(mock_hass, MagicMock(), mock_client)
-        with pytest.raises(UpdateFailed):
-            await coord._async_update_data()
+        getattr(stubs.clients[INSTANCE_URL], method).side_effect = error
+
+        await refresh(reauth_hass, entry, coordinator)
+
+        assert reauth_hass.states.get(entity_id).state == STATE_UNAVAILABLE
+        assert reauth_sources(reauth_hass) == []
 
 
-async def test_refused_refresh_at_setup_starts_reauth(
+@COORDINATORS
+@pytest.mark.parametrize(
+    "error", [api_error(401), api_error(500), OSError("down")], ids=["401", "500", "network"]
+)
+async def test_a_failing_first_poll_leaves_the_entry_retrying_without_reauth(
+    reauth_hass, stubs, coordinator, method, entity_id, state, error
+):
+    entry = make_entry(expires_in=3600)
+    entry.add_to_hass(reauth_hass)
+    client = stubs.clients.setdefault(INSTANCE_URL, make_api_client())
+    getattr(client, method).side_effect = error
+
+    assert not await reauth_hass.config_entries.async_setup(entry.entry_id)
+    await reauth_hass.async_block_till_done()
+
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert reauth_sources(reauth_hass) == []
+
+
+async def test_the_device_summary_is_for_todays_date(reauth_hass, stubs, entry):
+    stubs.clients[INSTANCE_URL].get_daily_summary.assert_awaited_with(dt_util.now().date())
+
+
+async def test_a_refused_refresh_at_setup_starts_reauth(
     hass: HomeAssistant, enable_custom_integrations: None, aioclient_mock: AiohttpClientMocker
 ):
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        unique_id="https://nocturne.example.com",
-        data={
-            "auth_implementation": DOMAIN,
-            "token": {
-                "access_token": "old-access",
-                "refresh_token": "revoked",
-                "expires_at": time.time() - 10,
-                "expires_in": 3600,
-            },
-            CONF_INSTANCE_URL: "https://nocturne.example.com",
-            CONF_CLIENT_ID: "client-id",
-            CONF_AUTHORIZE_URL: "https://nocturne.example.com/oauth/authorize",
-            CONF_TOKEN_URL: TOKEN_URL,
-        },
-    )
+    entry = make_entry(refresh_token="revoked")
     entry.add_to_hass(hass)
     aioclient_mock.post(TOKEN_URL, status=400, json={"error": "invalid_grant"})
 

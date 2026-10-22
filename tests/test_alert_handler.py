@@ -1,30 +1,34 @@
-"""Tests for the alert event handler."""
-from unittest.mock import AsyncMock, MagicMock
+"""Tests for the alert event handler, run against a real Home Assistant."""
+
+from __future__ import annotations
 
 import pytest
+from homeassistant.core import HomeAssistant
+from pytest_homeassistant_custom_component.common import async_capture_events, async_mock_service
 
 from custom_components.nocturne import alert_handler
 from custom_components.nocturne.alert_handler import NocturneAlertHandler
+from custom_components.nocturne.const import (
+    EVENT_NOCTURNE_ALERT,
+    EVENT_NOCTURNE_ALERT_ACKNOWLEDGED,
+    EVENT_NOCTURNE_ALERT_RESOLVED,
+)
 from tests import fixtures
 
+from .conftest import Notifications, make_alert_handler
 
-@pytest.fixture
-def mock_hass():
-    hass = MagicMock()
-    hass.bus = MagicMock()
-    hass.bus.async_fire = MagicMock()
-    hass.services = MagicMock()
-    hass.services.async_call = AsyncMock()
-    return hass
+NOTIFICATION_ID = f"nocturne_alert_{fixtures.EXCURSION_ID}"
+OTHER_NOTIFICATION_ID = f"nocturne_alert_{fixtures.OTHER_EXCURSION_ID}"
 
 
 @pytest.fixture
-def handler(mock_hass):
-    return NocturneAlertHandler(
-        hass=mock_hass,
-        notify_services=["notify.mobile_app_phone"],
-        display_name=lambda: "test-hub",
-    )
+def phone(hass: HomeAssistant) -> list:
+    return async_mock_service(hass, "notify", "mobile_app_phone")
+
+
+@pytest.fixture
+def handler(hass: HomeAssistant, notifications: Notifications, phone: list) -> NocturneAlertHandler:
+    return make_alert_handler(hass, "notify.mobile_app_phone")
 
 
 @pytest.fixture
@@ -34,188 +38,281 @@ def clock(monkeypatch):
     return now
 
 
-def _calls(mock_hass, domain):
-    return [c for c in mock_hass.services.async_call.call_args_list if c[0][0] == domain]
+async def _dispatch(hass: HomeAssistant, handler: NocturneAlertHandler, **overrides) -> None:
+    await handler.handle_alert_dispatch(fixtures.alert_dispatch(**overrides))
+    await hass.async_block_till_done()
 
 
-def _dismissed_ids(mock_hass):
-    return [c[0][2]["notification_id"] for c in _calls(mock_hass, "persistent_notification") if c[0][1] == "dismiss"]
+async def _acknowledge(hass: HomeAssistant, handler: NocturneAlertHandler, payload: dict) -> None:
+    await handler.handle_alert_acknowledged(payload)
+    await hass.async_block_till_done()
 
 
-def _notification_id(excursion_id):
-    return f"nocturne_alert_{excursion_id}"
-
-
-@pytest.mark.asyncio
-async def test_dispatch_fires_ha_event(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    mock_hass.bus.async_fire.assert_called_once()
-    call_args = mock_hass.bus.async_fire.call_args
-    assert call_args[0][0] == "nocturne_alert"
-    assert call_args[0][1]["excursion_id"] == fixtures.EXCURSION_ID
-    assert call_args[0][1]["severity"] == "critical"
-    assert call_args[0][1]["glucose_value"] == 55
-
-
-@pytest.mark.asyncio
-async def test_dispatch_creates_persistent_notification(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    pn_calls = _calls(mock_hass, "persistent_notification")
-    assert len(pn_calls) == 1
-    assert pn_calls[0][0][1] == "create"
-    assert pn_calls[0][0][2]["notification_id"] == _notification_id(fixtures.EXCURSION_ID)
-
-
-@pytest.mark.asyncio
-async def test_dispatch_sends_mobile_push(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    notify_calls = _calls(mock_hass, "notify")
-    assert len(notify_calls) == 1
-    assert notify_calls[0][0][1] == "mobile_app_phone"
-
-
-@pytest.mark.asyncio
-async def test_dispatch_critical_push_data(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    push_data = _calls(mock_hass, "notify")[0][0][2]["data"]
-    assert push_data["push"]["interruption-level"] == "critical"
-
-
-@pytest.mark.asyncio
-async def test_repeated_dispatch_fires_one_event_and_one_set_of_notifications(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    clock[0] += 1
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-
-    assert mock_hass.bus.async_fire.call_count == 1
-    assert len(_calls(mock_hass, "persistent_notification")) == 1
-    assert len(_calls(mock_hass, "notify")) == 1
-
-
-@pytest.mark.asyncio
-async def test_dispatch_after_the_window_is_handled_again(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    clock[0] += alert_handler.DISPATCH_DEDUPE_WINDOW_SECONDS + 1
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-
-    assert mock_hass.bus.async_fire.call_count == 2
-    assert len(_calls(mock_hass, "notify")) == 2
-
-
-@pytest.mark.asyncio
-async def test_different_excursion_or_instance_is_not_a_repeat(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch(excursionId=fixtures.OTHER_EXCURSION_ID))
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch(instanceId=fixtures.OTHER_INSTANCE_ID))
-
-    assert mock_hass.bus.async_fire.call_count == 3
-
-
-@pytest.mark.asyncio
-async def test_dedupe_memory_is_bounded(handler, mock_hass, clock):
-    for index in range(alert_handler.DISPATCH_DEDUPE_MAX_ENTRIES * 2):
-        await handler.handle_alert_dispatch(fixtures.alert_dispatch(instanceId=f"instance-{index}"))
-
-    assert len(handler._recent_dispatches) <= alert_handler.DISPATCH_DEDUPE_MAX_ENTRIES
-
-
-@pytest.mark.asyncio
-async def test_dedupe_memory_drops_entries_past_the_window(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    clock[0] += alert_handler.DISPATCH_DEDUPE_WINDOW_SECONDS + 1
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch(instanceId=fixtures.OTHER_INSTANCE_ID))
-
-    assert list(handler._recent_dispatches) == [(fixtures.EXCURSION_ID, fixtures.OTHER_INSTANCE_ID)]
-
-
-@pytest.mark.asyncio
-async def test_resolved_dismisses_notification(handler, mock_hass):
+async def _resolve(hass: HomeAssistant, handler: NocturneAlertHandler) -> None:
     await handler.handle_alert_resolved(fixtures.alert_resolved())
-    mock_hass.bus.async_fire.assert_called_once()
-    assert mock_hass.bus.async_fire.call_args[0][0] == "nocturne_alert_resolved"
-    assert _dismissed_ids(mock_hass) == [_notification_id(fixtures.EXCURSION_ID)]
+    await hass.async_block_till_done()
 
 
-@pytest.mark.asyncio
-async def test_dispatch_notifications_name_the_instance(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
+class TestDispatch:
+    async def test_fires_the_alert_event(self, hass, handler):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
 
-    titles = [c[0][2]["title"] for c in mock_hass.services.async_call.call_args_list]
-    assert titles == ["Nocturne (test-hub): Urgent Low"] * 2
+        await _dispatch(hass, handler)
 
+        assert [event.data for event in events] == [
+            {
+                "excursion_id": fixtures.EXCURSION_ID,
+                "rule_name": "Urgent Low",
+                "severity": "critical",
+                "message": "Urgent Low: Glucose is 55 mg/dL",
+                "glucose_value": 55,
+                "trend": None,
+                "fired_at": "2026-05-14T12:00:00Z",
+            }
+        ]
 
-@pytest.mark.asyncio
-async def test_excursion_acknowledgement_updates_its_notification(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    mock_hass.services.async_call.reset_mock()
+    async def test_opens_a_persistent_notification_naming_the_instance(
+        self, hass, handler, notifications
+    ):
+        await _dispatch(hass, handler)
 
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_for_excursion())
+        assert list(notifications.open) == [NOTIFICATION_ID]
+        assert notifications.open[NOTIFICATION_ID]["title"] == "Nocturne (test-hub): Urgent Low"
+        assert notifications.open[NOTIFICATION_ID]["message"] == "Urgent Low: Glucose is 55 mg/dL"
 
-    assert mock_hass.bus.async_fire.call_args[0][0] == "nocturne_alert_acknowledged"
-    pn_calls = _calls(mock_hass, "persistent_notification")
-    assert len(pn_calls) == 1
-    assert pn_calls[0][0][1] == "create"
-    assert pn_calls[0][0][2]["title"] == "Nocturne (test-hub): Urgent Low (Acknowledged)"
+    async def test_pushes_to_the_phone_naming_the_instance(self, hass, handler, phone):
+        await _dispatch(hass, handler)
 
+        assert [call.data["title"] for call in phone] == ["Nocturne (test-hub): Urgent Low"]
+        assert [call.data["message"] for call in phone] == ["Urgent Low: Glucose is 55 mg/dL"]
 
-@pytest.mark.asyncio
-async def test_excursion_acknowledgement_for_an_unknown_excursion_creates_nothing(handler, mock_hass):
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_for_excursion())
-
-    assert mock_hass.bus.async_fire.call_count == 1
-    assert mock_hass.services.async_call.await_count == 0
-
-
-@pytest.mark.asyncio
-async def test_tenant_wide_acknowledgement_dismisses_every_open_notification_and_creates_none(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    await handler.handle_alert_dispatch(
-        fixtures.alert_dispatch(excursionId=fixtures.OTHER_EXCURSION_ID, instanceId=fixtures.OTHER_INSTANCE_ID)
+    @pytest.mark.parametrize(
+        ("severity", "level", "priority", "channel"),
+        [
+            ("critical", "critical", "high", "nocturne_critical"),
+            ("warning", "time-sensitive", "high", "nocturne_warning"),
+            ("info", "active", "default", "nocturne_info"),
+            ("banana", "active", "default", "nocturne_info"),
+        ],
     )
-    mock_hass.services.async_call.reset_mock()
-    mock_hass.bus.async_fire.reset_mock()
+    async def test_push_urgency_follows_severity(
+        self, hass, handler, phone, severity, level, priority, channel
+    ):
+        await _dispatch(hass, handler, severity=severity)
 
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_tenant_wide())
+        assert phone[0].data["data"] == {
+            "push": {"interruption-level": level},
+            "priority": priority,
+            "channel": channel,
+        }
 
-    assert sorted(_dismissed_ids(mock_hass)) == sorted(
-        [_notification_id(fixtures.EXCURSION_ID), _notification_id(fixtures.OTHER_EXCURSION_ID)]
+    @pytest.mark.parametrize(
+        ("overrides", "message"),
+        [
+            ({}, "Urgent Low: Glucose is 55 mg/dL"),
+            ({"trend": "SingleDown"}, "Urgent Low: Glucose is 55 mg/dL SingleDown"),
+        ],
     )
-    creates = [c for c in _calls(mock_hass, "persistent_notification") if c[0][1] == "create"]
-    assert creates == []
-    event_name, event_data = mock_hass.bus.async_fire.call_args[0]
-    assert event_name == "nocturne_alert_acknowledged"
-    assert event_data["excursion_id"] is None
+    async def test_message_carries_the_reading_and_its_trend(
+        self, hass, handler, phone, overrides, message
+    ):
+        await _dispatch(hass, handler, **overrides)
+
+        assert phone[0].data["message"] == message
+
+    async def test_an_alert_without_a_reading_is_just_the_rule_name(
+        self, hass, handler, phone, notifications
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+
+        await handler.handle_alert_dispatch(
+            fixtures.alert_dispatch_without_reading(ruleName="Sensor Expired", severity="info")
+        )
+        await hass.async_block_till_done()
+
+        assert events[0].data["glucose_value"] is None
+        assert events[0].data["message"] == "Sensor Expired"
+        assert notifications.open[NOTIFICATION_ID]["message"] == "Sensor Expired"
+        assert [call.data["message"] for call in phone] == ["Sensor Expired"]
+
+    async def test_with_no_notify_services_the_event_and_notification_still_happen(
+        self, hass, notifications, phone
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+
+        await _dispatch(hass, make_alert_handler(hass))
+
+        assert len(events) == 1
+        assert list(notifications.open) == [NOTIFICATION_ID]
+        assert phone == []
+
+    async def test_every_configured_notify_service_gets_a_push(self, hass, notifications, phone):
+        tablet = async_mock_service(hass, "notify", "mobile_app_tablet")
+
+        await _dispatch(
+            hass,
+            make_alert_handler(hass, "notify.mobile_app_phone", "notify.mobile_app_tablet"),
+        )
+
+        assert len(phone) == 1
+        assert len(tablet) == 1
+
+    async def test_a_missing_notify_service_does_not_stop_the_others(
+        self, hass, notifications, phone
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+
+        await _dispatch(
+            hass, make_alert_handler(hass, "notify.removed_phone", "notify.mobile_app_phone")
+        )
+
+        assert len(events) == 1
+        assert list(notifications.open) == [NOTIFICATION_ID]
+        assert len(phone) == 1
 
 
-@pytest.mark.asyncio
-async def test_tenant_wide_acknowledgement_leaves_nothing_open(handler, mock_hass, clock):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_tenant_wide())
-    mock_hass.services.async_call.reset_mock()
+class TestDuplicateDispatch:
+    async def test_a_repeat_fires_one_event_and_one_set_of_notifications(
+        self, hass, handler, phone, notifications, clock
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
 
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_tenant_wide())
+        await _dispatch(hass, handler)
+        clock[0] += 1
+        await _dispatch(hass, handler)
 
-    assert mock_hass.services.async_call.await_count == 0
+        assert len(events) == 1
+        assert len(notifications.created) == 1
+        assert len(phone) == 1
+
+    async def test_a_dispatch_after_the_window_is_handled_again(self, hass, handler, phone, clock):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+
+        await _dispatch(hass, handler)
+        clock[0] += alert_handler.DISPATCH_DEDUPE_WINDOW_SECONDS + 1
+        await _dispatch(hass, handler)
+
+        assert len(events) == 2
+        assert len(phone) == 2
+
+    async def test_a_different_excursion_or_instance_is_not_a_repeat(self, hass, handler, clock):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+
+        await _dispatch(hass, handler)
+        await _dispatch(hass, handler, excursionId=fixtures.OTHER_EXCURSION_ID)
+        await _dispatch(hass, handler, instanceId=fixtures.OTHER_INSTANCE_ID)
+
+        assert len(events) == 3
+
+    async def test_the_oldest_dispatch_is_forgotten_first_once_there_are_too_many(
+        self, hass, handler, clock
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT)
+        newest = alert_handler.DISPATCH_DEDUPE_MAX_ENTRIES
+        for index in range(newest + 1):
+            await _dispatch(hass, handler, instanceId=f"instance-{index}")
+        handled = len(events)
+
+        await _dispatch(hass, handler, instanceId=f"instance-{newest}")
+        assert len(events) == handled
+
+        await _dispatch(hass, handler, instanceId="instance-0")
+        assert len(events) == handled + 1
 
 
-@pytest.mark.asyncio
-async def test_resolved_excursion_is_not_dismissed_again_by_tenant_wide_acknowledgement(handler, mock_hass):
-    await handler.handle_alert_dispatch(fixtures.alert_dispatch())
-    await handler.handle_alert_resolved(fixtures.alert_resolved())
-    mock_hass.services.async_call.reset_mock()
+class TestResolved:
+    async def test_fires_the_event_and_dismisses_the_notification(
+        self, hass, handler, notifications
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_RESOLVED)
+        await _dispatch(hass, handler)
 
-    await handler.handle_alert_acknowledged(fixtures.alert_acknowledged_tenant_wide())
+        await _resolve(hass, handler)
 
-    assert _dismissed_ids(mock_hass) == []
-
-
-@pytest.mark.asyncio
-async def test_severity_mapping_warning(handler):
-    result = handler._map_push_severity("warning")
-    assert result["push"]["interruption-level"] == "time-sensitive"
+        assert [event.data for event in events] == [
+            {"excursion_id": fixtures.EXCURSION_ID, "resolved_at": "2026-05-14T12:30:00Z"}
+        ]
+        assert notifications.open == {}
+        assert notifications.dismissed == [NOTIFICATION_ID]
 
 
-@pytest.mark.asyncio
-async def test_severity_mapping_info(handler):
-    result = handler._map_push_severity("info")
-    assert result["push"]["interruption-level"] == "active"
+class TestAcknowledged:
+    async def test_an_excursion_acknowledgement_fires_the_event(self, hass, handler):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+
+        assert [event.data for event in events] == [
+            {
+                "excursion_id": fixtures.EXCURSION_ID,
+                "acknowledged_by": "homeassistant:test-hub",
+                "acknowledged_at": "2026-05-14T12:15:00Z",
+            }
+        ]
+
+    async def test_an_excursion_acknowledgement_updates_its_notification(
+        self, hass, handler, notifications
+    ):
+        await _dispatch(hass, handler)
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+
+        assert list(notifications.open) == [NOTIFICATION_ID]
+        assert (
+            notifications.open[NOTIFICATION_ID]["title"]
+            == "Nocturne (test-hub): Urgent Low (Acknowledged)"
+        )
+        assert "homeassistant:test-hub" in notifications.open[NOTIFICATION_ID]["message"]
+
+    async def test_acknowledging_an_unknown_excursion_creates_nothing(
+        self, hass, handler, notifications
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+
+        assert len(events) == 1
+        assert notifications.created == []
+        assert notifications.dismissed == []
+
+    async def test_a_tenant_wide_acknowledgement_dismisses_every_open_notification(
+        self, hass, handler, notifications, clock
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
+        await _dispatch(hass, handler)
+        await _dispatch(
+            hass,
+            handler,
+            excursionId=fixtures.OTHER_EXCURSION_ID,
+            instanceId=fixtures.OTHER_INSTANCE_ID,
+        )
+        created = len(notifications.created)
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_tenant_wide())
+
+        assert notifications.open == {}
+        assert sorted(notifications.dismissed) == sorted([NOTIFICATION_ID, OTHER_NOTIFICATION_ID])
+        assert len(notifications.created) == created
+        assert events[0].data["excursion_id"] is None
+
+    async def test_a_tenant_wide_acknowledgement_forgets_the_excursions_it_dismissed(
+        self, hass, handler, notifications, clock
+    ):
+        await _dispatch(hass, handler)
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_tenant_wide())
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+
+        assert notifications.open == {}
+        assert len(notifications.created) == 1
+
+    async def test_acknowledging_a_resolved_excursion_creates_nothing(
+        self, hass, handler, notifications
+    ):
+        await _dispatch(hass, handler)
+        await _resolve(hass, handler)
+
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+
+        assert notifications.open == {}
+        assert len(notifications.created) == 1

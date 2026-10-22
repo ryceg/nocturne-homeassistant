@@ -2,42 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
 from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from nocturne_py import ApsSnapshot, PumpSnapshot
 
-from custom_components.nocturne.sensor import GLUCOSE_SENSORS, NocturneSensor
+from custom_components.nocturne.const import DOMAIN
 
 from .conftest import make_api_client, make_entry, set_up
-
-
-class TestNocturneSensor:
-    @pytest.fixture
-    def sensor(self, mock_glucose_coordinator) -> NocturneSensor:
-        desc = GLUCOSE_SENSORS[0]  # current_glucose
-        return NocturneSensor(mock_glucose_coordinator, desc, "test_entry")
-
-    def test_unique_id(self, sensor):
-        assert sensor._attr_unique_id == "test_entry_current_glucose"
-
-    def test_device_info(self, sensor):
-        assert ("nocturne", "test_entry") in sensor._attr_device_info["identifiers"]
-
-    def test_native_value(self, sensor, glucose_data):
-        assert sensor.native_value == 120
-
-    def test_native_value_none_when_no_data(self, sensor):
-        sensor.coordinator.data = None
-        assert sensor.native_value is None
-
-    def test_available_true(self, sensor):
-        # super().available checks last_update_success
-        sensor.coordinator.last_update_success = True
-        assert sensor.available is True
-
-    def test_available_false_when_no_data(self, sensor):
-        sensor.coordinator.data = None
-        assert sensor.available is False
 
 
 class TestSensorSetupEntry:
@@ -75,3 +47,24 @@ class TestSensorSetupEntry:
 
         assert states()["sensor.nocturne_insulin_on_board"] == "2.5"
         assert states()["sensor.nocturne_pump_reservoir"] == "90.0"
+
+
+class TestSensorRegistration:
+    async def test_every_sensor_is_registered_under_its_entry_and_device(self, reauth_hass, stubs):
+        first = make_entry("https://first.example.com", "first-client", expires_in=3600)
+        second = make_entry("https://second.example.com", "second-client", expires_in=3600)
+        await set_up(reauth_hass, first, second)
+
+        entities = er.async_get(reauth_hass)
+        devices = dr.async_get(reauth_hass)
+        for entry in (first, second):
+            registered = er.async_entries_for_config_entry(entities, entry.entry_id)
+            assert len(registered) == 12
+            assert all(e.unique_id.startswith(f"{entry.entry_id}_") for e in registered)
+            assert {e.device_id for e in registered} == {
+                devices.async_get_device({(DOMAIN, entry.entry_id)}).id
+            }
+        assert (
+            entities.async_get_entity_id("sensor", DOMAIN, f"{first.entry_id}_current_glucose")
+            != entities.async_get_entity_id("sensor", DOMAIN, f"{second.entry_id}_current_glucose")
+        )
