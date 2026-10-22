@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import logging
-import secrets
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,11 +14,9 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.config_entry_oauth2_flow import (
     AbstractOAuth2FlowHandler,
-    AbstractOAuth2Implementation,
-    async_register_implementation,
+    LocalOAuth2ImplementationWithPkce,
 )
 from homeassistant.helpers.network import get_url
-from yarl import URL
 
 from .api import NocturneApiClient
 from .const import (
@@ -38,33 +33,17 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _generate_pkce() -> tuple[str, str]:
-    """Generate PKCE code_verifier and code_challenge (S256)."""
-    code_verifier = secrets.token_urlsafe(64)
-    digest = hashlib.sha256(code_verifier.encode()).digest()
-    code_challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
-    return code_verifier, code_challenge
-
-
-class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
-    """OAuth2 implementation for a Nocturne instance (public client with PKCE)."""
+class NocturneOAuth2Implementation(LocalOAuth2ImplementationWithPkce):
+    """OAuth2 implementation for one registered client of a Nocturne instance."""
 
     def __init__(
         self,
         hass: HomeAssistant,
-        domain: str,
-        instance_url: str,
+        client_id: str,
         authorize_url: str,
         token_url: str,
-        client_id: str,
     ) -> None:
-        self.hass = hass
-        self._domain = domain
-        self._instance_url = instance_url
-        self._authorize_url = authorize_url
-        self._token_url = token_url
-        self._client_id = client_id
-        self._code_verifier: str | None = None
+        super().__init__(hass, DOMAIN, client_id, authorize_url, token_url)
 
     @classmethod
     def from_entry_data(
@@ -73,11 +52,9 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
         """Build the implementation from a config entry's stored client and URLs."""
         return cls(
             hass,
-            DOMAIN,
-            data[CONF_INSTANCE_URL],
+            data[CONF_CLIENT_ID],
             data[CONF_AUTHORIZE_URL],
             data[CONF_TOKEN_URL],
-            data[CONF_CLIENT_ID],
         )
 
     @property
@@ -85,68 +62,9 @@ class NocturneOAuth2Implementation(AbstractOAuth2Implementation):
         return "Nocturne"
 
     @property
-    def domain(self) -> str:
-        return self._domain
-
-    @property
     def redirect_uri(self) -> str:
         """Return HA's external auth callback URL."""
         return f"{get_url(self.hass, allow_internal=False, allow_ip=False)}/auth/external/callback"
-
-    async def async_generate_authorize_url(self, flow_id: str) -> str:
-        """Generate the full authorize URL with OAuth2 + PKCE params."""
-        from homeassistant.helpers.config_entry_oauth2_flow import _encode_jwt
-
-        self._code_verifier, code_challenge = _generate_pkce()
-
-        state = _encode_jwt(
-            self.hass,
-            {"flow_id": flow_id, "redirect_uri": self.redirect_uri},
-        )
-
-        return str(
-            URL(self._authorize_url).with_query(
-                {
-                    "response_type": "code",
-                    "client_id": self._client_id,
-                    "redirect_uri": self.redirect_uri,
-                    "state": state,
-                    "scope": " ".join(DEFAULT_SCOPES),
-                    "code_challenge": code_challenge,
-                    "code_challenge_method": "S256",
-                }
-            )
-        )
-
-    async def async_resolve_external_data(self, external_data: Any) -> dict:
-        """Exchange authorization code for tokens."""
-        session = async_get_clientsession(self.hass)
-        resp = await session.post(
-            self._token_url,
-            data={
-                "grant_type": "authorization_code",
-                "code": external_data["code"],
-                "redirect_uri": self.redirect_uri,
-                "client_id": self._client_id,
-                "code_verifier": self._code_verifier,
-            },
-        )
-        resp.raise_for_status()
-        return await resp.json()
-
-    async def _async_refresh_token(self, token: dict) -> dict:
-        """Refresh a token."""
-        session = async_get_clientsession(self.hass)
-        resp = await session.post(
-            self._token_url,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": token["refresh_token"],
-                "client_id": self._client_id,
-            },
-        )
-        resp.raise_for_status()
-        return {**token, **await resp.json()}
 
 
 class NocturneOptionsFlowHandler(OptionsFlow):
@@ -199,7 +117,6 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
         super().__init__()
         self._instance_url: str | None = None
         self._discovery: dict[str, Any] | None = None
-        self._client_id: str | None = None
         self._authorize_url: str | None = None
         self._token_url: str | None = None
 
@@ -265,18 +182,12 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                         errors["base"] = "cannot_connect"
                         return self._show_form(errors)
 
-                    self._client_id = dcr_response["client_id"]
-
-                    impl = NocturneOAuth2Implementation(
+                    self.flow_impl = NocturneOAuth2Implementation(
                         self.hass,
-                        DOMAIN,
-                        url,
+                        dcr_response["client_id"],
                         self._authorize_url,
                         self._token_url,
-                        self._client_id,
                     )
-                    async_register_implementation(self.hass, DOMAIN, impl)
-                    self.flow_impl = impl
 
                     return await self.async_step_auth()
                 errors["base"] = "cannot_connect"
@@ -324,7 +235,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                 self._get_reauth_entry(), data_updates=data
             )
         data[CONF_INSTANCE_URL] = self._instance_url
-        data[CONF_CLIENT_ID] = self._client_id
+        data[CONF_CLIENT_ID] = self.flow_impl.client_id
         data[CONF_AUTHORIZE_URL] = self._authorize_url
         data[CONF_TOKEN_URL] = self._token_url
         return self.async_create_entry(title="Nocturne", data=data)
