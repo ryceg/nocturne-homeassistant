@@ -19,6 +19,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .alert_handler import NocturneAlertHandler
 from .api import NocturneApiClient
+from .auth import oauth_token_provider
 from .config_flow import NocturneOAuth2Implementation
 from .const import (
     CONF_CLIENT_ID,
@@ -30,7 +31,7 @@ from .const import (
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
 from .services import async_setup_services
-from .signalr import NocturneSignalRClient, TokenProvider
+from .signalr import NocturneSignalRClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,7 +74,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     implementation = await async_get_config_entry_implementation(hass, entry)
     oauth_session = OAuth2Session(hass, entry, implementation)
 
-    client = NocturneApiClient(base_url, oauth_session=oauth_session)
+    token_provider = oauth_token_provider(oauth_session)
+    client = NocturneApiClient(base_url, token_provider=token_provider)
 
     glucose_coordinator = GlucoseCoordinator(hass, entry, client)
     device_coordinator = DeviceCoordinator(hass, entry, client)
@@ -95,7 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
         hass=hass,
         instance_url=base_url,
         instance_id=entry.data.get(CONF_CLIENT_ID, ""),
-        async_get_token=_access_token_provider(oauth_session),
+        async_get_token=token_provider,
         on_glucose_reading=_on_glucose_reading,
         on_alert_dispatch=alert_handler.handle_alert_dispatch,
         on_alert_resolved=alert_handler.handle_alert_resolved,
@@ -130,16 +132,6 @@ def _display_name(entry: NocturneConfigEntry) -> str:
     if entry.title != DEFAULT_TITLE:
         return entry.title
     return urlparse(entry.data[CONF_INSTANCE_URL]).hostname or entry.title
-
-
-def _access_token_provider(oauth_session: OAuth2Session) -> TokenProvider:
-    """Return a provider that refreshes the OAuth token when it is due and yields it."""
-
-    async def _get_access_token() -> str:
-        await oauth_session.async_ensure_token_valid()
-        return oauth_session.token["access_token"]
-
-    return _get_access_token
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> bool:

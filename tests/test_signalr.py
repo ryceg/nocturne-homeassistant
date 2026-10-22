@@ -38,31 +38,39 @@ def test_hub_url(signalr_client):
     assert signalr_client.hub_url == "https://nocturne.example.com/hubs/home-assistant"
 
 
+async def _deliver(signalr_client, event, payload):
+    handlers = {}
+    stub = MagicMock()
+    stub.on.side_effect = handlers.__setitem__
+    signalr_client._subscribe_events(stub)
+    await handlers[event](payload)
+
+
 @pytest.mark.asyncio
 async def test_on_glucose_reading_callback(signalr_client):
     test_data = {"value": 120, "trend": "Flat"}
-    await signalr_client._handle_glucose_reading(test_data)
+    await _deliver(signalr_client, "glucose_reading", test_data)
     signalr_client._on_glucose_reading.assert_awaited_once_with(test_data)
 
 
 @pytest.mark.asyncio
 async def test_on_alert_dispatch_callback(signalr_client):
     test_payload = {"excursionId": "test-uuid", "ruleName": "Urgent Low", "severity": "critical"}
-    await signalr_client._handle_alert_dispatch(test_payload)
+    await _deliver(signalr_client, "alert_dispatch", test_payload)
     signalr_client._on_alert_dispatch.assert_awaited_once_with(test_payload)
 
 
 @pytest.mark.asyncio
 async def test_on_alert_resolved_callback(signalr_client):
     test_payload = {"excursionId": "test-uuid"}
-    await signalr_client._handle_alert_resolved(test_payload)
+    await _deliver(signalr_client, "alert_resolved", test_payload)
     signalr_client._on_alert_resolved.assert_awaited_once_with(test_payload)
 
 
 @pytest.mark.asyncio
 async def test_on_alert_acknowledged_callback(signalr_client):
     test_payload = {"excursionId": "test-uuid", "acknowledgedBy": "homeassistant:test"}
-    await signalr_client._handle_alert_acknowledged(test_payload)
+    await _deliver(signalr_client, "alert_acknowledged", test_payload)
     signalr_client._on_alert_acknowledged.assert_awaited_once_with(test_payload)
 
 
@@ -70,7 +78,7 @@ async def test_on_alert_acknowledged_callback(signalr_client):
 async def test_handle_unwraps_list(signalr_client):
     """SignalR sends args as a list — handler should unwrap."""
     test_data = [{"value": 120}]
-    await signalr_client._handle_glucose_reading(test_data)
+    await _deliver(signalr_client, "glucose_reading", test_data)
     signalr_client._on_glucose_reading.assert_awaited_once_with({"value": 120})
 
 
