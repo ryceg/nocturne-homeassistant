@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pysignalr.client import SignalRClient
+from pysignalr.messages import CompletionMessage
 from nocturne_py import (
     ApsSnapshot,
     DeviceAgeInfo,
@@ -118,3 +122,30 @@ def mock_hass(
         }
     }
     return hass
+
+
+@pytest.fixture
+def connect_hub():
+    """Connect a Nocturne client to a real pysignalr client whose transport is stubbed.
+
+    The server's completion, when given, is fed back through pysignalr's own message dispatch.
+    """
+
+    def connect(client, reply=None, send_error=None):
+        hub = SignalRClient("https://nocturne.example.com/hubs/home-assistant")
+
+        async def transport_send(message):
+            if send_error is not None:
+                raise send_error
+            if reply is not None:
+                asyncio.get_running_loop().call_soon(
+                    asyncio.ensure_future,
+                    hub._on_message(CompletionMessage(message.invocation_id, **reply)),
+                )
+
+        hub._transport.send = transport_send
+        client._client = hub
+        client._connected = True
+        return hub
+
+    return connect

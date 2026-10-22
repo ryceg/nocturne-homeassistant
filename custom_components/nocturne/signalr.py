@@ -10,10 +10,16 @@ from aiohttp import ClientError
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from pysignalr.client import SignalRClient
+from pysignalr.messages import CompletionMessage
+from websockets.exceptions import ConnectionClosed
 
 from .const import SIGNALR_HUB_PATH
 
 _LOGGER = logging.getLogger(__name__)
+
+NOT_CONNECTED_MESSAGE = "Cannot acknowledge the alert: not connected to Nocturne"
+ACKNOWLEDGE_TIMEOUT_SECONDS = 10
+ACKNOWLEDGE_SUCCESS_OUTCOMES = frozenset({"acknowledged", "muted"})
 
 AsyncCallback = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 
@@ -83,11 +89,47 @@ class NocturneSignalRClient:
         _LOGGER.info("SignalR connection stopped")
 
     async def acknowledge(self, excursion_id: str, acknowledged_by: str) -> None:
-        """Send an acknowledgement for an excursion."""
+        """Acknowledge an excursion and wait for the server's verdict."""
         if not self._client or not self._connected:
-            raise ConnectionError("SignalR client is not connected")
-        await self._client.send("Acknowledge", [excursion_id, acknowledged_by])
-        _LOGGER.debug("Sent ack for excursion %s by %s", excursion_id, acknowledged_by)
+            raise HomeAssistantError(NOT_CONNECTED_MESSAGE)
+        client = self._client
+        completion: asyncio.Future[CompletionMessage] = asyncio.get_running_loop().create_future()
+
+        async def on_completion(message: CompletionMessage) -> None:
+            if not completion.done():
+                completion.set_result(message)
+
+        async def ignore_error(message: CompletionMessage) -> None:
+            """Errors reach the caller through on_completion; pysignalr raises without a handler."""
+
+        client.on_error(ignore_error)
+        try:
+            await client.send(
+                "Acknowledge", [excursion_id, acknowledged_by], on_invocation=on_completion
+            )
+            message = await asyncio.wait_for(completion, ACKNOWLEDGE_TIMEOUT_SECONDS)
+        except (RuntimeError, ConnectionClosed) as err:
+            raise HomeAssistantError(NOT_CONNECTED_MESSAGE) from err
+        except TimeoutError as err:
+            raise HomeAssistantError("Nocturne did not answer the acknowledgement in time") from err
+        finally:
+            # pysignalr keeps the handler until a completion arrives and offers no way to drop it
+            for invocation_id, handler in list(client._invocation_handlers.items()):
+                if handler is on_completion:
+                    del client._invocation_handlers[invocation_id]
+        if message.error:
+            raise HomeAssistantError(
+                f"Nocturne refused the acknowledgement: {str(message.error).rstrip('.')}. "
+                "If it names a scope, "
+                "reauthenticate the Nocturne integration to grant the alerts.readwrite scope."
+            )
+        if message.result not in ACKNOWLEDGE_SUCCESS_OUTCOMES:
+            raise HomeAssistantError(
+                f"Nocturne did not acknowledge the alert: it reported {message.result!r}"
+            )
+        _LOGGER.debug(
+            "Excursion %s acknowledged by %s: %s", excursion_id, acknowledged_by, message.result
+        )
 
     async def _on_connected(self) -> None:
         # Refresh token if callback provided

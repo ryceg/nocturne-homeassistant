@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
+from homeassistant.exceptions import HomeAssistantError
+
 from custom_components.nocturne.alert_handler import NocturneAlertHandler
 from custom_components.nocturne.coordinator import GlucoseCoordinator
 from custom_components.nocturne.signalr import NocturneSignalRClient
@@ -258,7 +260,7 @@ class TestAcknowledgeServiceFlow:
     """Verify acknowledge_alert calls SignalR client correctly."""
 
     @pytest.mark.asyncio
-    async def test_acknowledge_sends_via_signalr(self, mock_hass):
+    async def test_acknowledge_invokes_hub_and_awaits_completion(self, mock_hass, connect_hub):
         signalr_client = NocturneSignalRClient(
             hass=mock_hass,
             instance_url="https://nocturne.example.com",
@@ -269,16 +271,19 @@ class TestAcknowledgeServiceFlow:
             on_alert_resolved=AsyncMock(),
             on_alert_acknowledged=AsyncMock(),
         )
-        # Simulate a connected state with a mock underlying client
-        signalr_client._connected = True
-        signalr_client._client = MagicMock()
-        signalr_client._client.send = AsyncMock()
+        hub = connect_hub(signalr_client, reply={"result": "acknowledged"})
+        sent = []
+        transport_send = hub._transport.send
+
+        async def recording_send(message):
+            sent.append((message.target, message.arguments))
+            await transport_send(message)
+
+        hub._transport.send = recording_send
 
         await signalr_client.acknowledge("exc-001", "homeassistant:test-hub")
 
-        signalr_client._client.send.assert_awaited_once_with(
-            "Acknowledge", ["exc-001", "homeassistant:test-hub"]
-        )
+        assert sent == [("Acknowledge", ["exc-001", "homeassistant:test-hub"])]
 
     @pytest.mark.asyncio
     async def test_acknowledge_raises_when_disconnected(self, mock_hass):
@@ -292,7 +297,7 @@ class TestAcknowledgeServiceFlow:
             on_alert_resolved=AsyncMock(),
             on_alert_acknowledged=AsyncMock(),
         )
-        with pytest.raises(ConnectionError):
+        with pytest.raises(HomeAssistantError):
             await signalr_client.acknowledge("exc-001", "homeassistant:test-hub")
 
 
