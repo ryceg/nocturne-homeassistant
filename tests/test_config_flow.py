@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from aiohttp import ClientConnectionError, ContentTypeError
+from aiohttp import ClientConnectionError
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -17,9 +16,7 @@ from homeassistant.helpers.config_entry_oauth2_flow import MY_AUTH_CALLBACK_PATH
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.nocturne.config_flow import (
-    NocturneOAuth2FlowHandler,
     NocturneOAuth2Implementation,
-    NocturneOptionsFlowHandler,
     _rebase_url,
 )
 from custom_components.nocturne.const import (
@@ -134,6 +131,9 @@ class TestUserFlow:
         assert _challenge(second_request["code_verifier"]) == second_query["code_challenge"][0]
         assert first_request["code_verifier"] != second_request["code_verifier"]
         assert "client_secret" not in first_request
+        assert first_entry.data[CONF_INSTANCE_URL] == first_url
+        assert first_entry.data[CONF_AUTHORIZE_URL] == f"{first_url}/oauth/authorize"
+        assert first_entry.data[CONF_REQUESTED_SCOPES] == DEFAULT_SCOPES
         assert first_entry.data[CONF_CLIENT_ID] == "first-client"
         assert first_entry.data[CONF_TOKEN_URL] == f"{first_url}/oauth/token"
         assert second_entry.data[CONF_CLIENT_ID] == "second-client"
@@ -240,139 +240,104 @@ class TestRebaseUrl:
         assert rebased == "https://nightscout.example.com/oauth/authorize?a=1&b=2"
 
 
-class TestDiscoveryAndRegistrationFailures:
-    @pytest.fixture
-    def flow(self):
-        return NocturneOAuth2FlowHandler()
+DISCOVERY_URL = f"{INSTANCE_URL}/.well-known/openid-configuration"
+REGISTRATION_URL = f"{INSTANCE_URL}/oauth/register"
+DISCOVERY_DOCUMENT = {
+    "authorization_endpoint": AUTHORIZE_URL,
+    "token_endpoint": TOKEN_URL,
+    "registration_endpoint": REGISTRATION_URL,
+}
+BROKEN_RESPONSES = pytest.mark.parametrize(
+    "response",
+    [
+        {"exc": ClientConnectionError("down")},
+        {"exc": TimeoutError()},
+        {"status": 500},
+        {"text": "<html></html>", "headers": {"Content-Type": "text/html"}},
+        {"text": "{not json", "headers": {"Content-Type": "application/json"}},
+    ],
+    ids=["connection", "timeout", "server-error", "content-type", "bad-json"],
+)
 
-    @pytest.fixture(
-        params=[
-            ClientConnectionError("down"),
-            TimeoutError(),
-            ContentTypeError(MagicMock(), ()),
-            json.JSONDecodeError("bad", "", 0),
-        ],
-        ids=["connection", "timeout", "content-type", "bad-json"],
-    )
-    def failure(self, request):
-        return request.param
 
-    async def test_discovery_returns_none_when_the_call_fails(self, flow, failure):
-        session = MagicMock()
-        session.get = AsyncMock(side_effect=failure)
-
-        assert await flow._fetch_discovery(session, "https://example.com") is None
-
-    async def test_discovery_returns_none_when_the_body_is_not_json(self, flow, failure):
-        session = MagicMock()
-        session.get = AsyncMock(
-            return_value=MagicMock(status=200, json=AsyncMock(side_effect=failure))
+async def _submit_instance_url(hass: HomeAssistant, reachable: bool = True) -> dict:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "user"
+    with patch("custom_components.nocturne.config_flow.NocturneApiClient") as api:
+        api.return_value.validate_connection = AsyncMock(return_value=reachable)
+        return await hass.config_entries.flow.async_configure(
+            result["flow_id"], {CONF_INSTANCE_URL: INSTANCE_URL}
         )
 
-        assert await flow._fetch_discovery(session, "https://example.com") is None
 
-    async def test_registration_returns_none_when_the_call_fails(self, flow, failure):
-        session = MagicMock()
-        session.post = AsyncMock(side_effect=failure)
+def _requested(aioclient_mock: AiohttpClientMocker) -> list[str]:
+    return [str(url) for _, url, _, _ in aioclient_mock.mock_calls]
 
-        result = await flow._register_client(session, "https://example.com/register", "https://ha")
 
-        assert result is None
+class TestUserFlowFailures:
+    async def test_an_unreachable_instance_shows_an_error_without_discovery(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker
+    ):
+        result = await _submit_instance_url(reauth_hass, reachable=False)
 
-    async def test_registration_returns_none_when_the_body_is_not_json(self, flow, failure):
-        session = MagicMock()
-        session.post = AsyncMock(
-            return_value=MagicMock(status=201, json=AsyncMock(side_effect=failure))
-        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
+        assert _requested(aioclient_mock) == []
 
-        result = await flow._register_client(session, "https://example.com/register", "https://ha")
+    @BROKEN_RESPONSES
+    async def test_a_broken_discovery_document_shows_an_error_without_registering(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker, response
+    ):
+        aioclient_mock.get(DISCOVERY_URL, **response)
 
-        assert result is None
+        result = await _submit_instance_url(reauth_hass)
 
-    async def test_unexpected_discovery_errors_are_not_swallowed(self, flow):
-        session = MagicMock()
-        session.get = AsyncMock(side_effect=RuntimeError("bug"))
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
+        assert _requested(aioclient_mock) == [DISCOVERY_URL]
+
+    @BROKEN_RESPONSES
+    async def test_a_failed_registration_shows_an_error_and_creates_no_entry(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker, response
+    ):
+        aioclient_mock.get(DISCOVERY_URL, json=DISCOVERY_DOCUMENT)
+        aioclient_mock.post(REGISTRATION_URL, **response)
+
+        result = await _submit_instance_url(reauth_hass)
+
+        assert result["type"] is FlowResultType.FORM
+        assert result["errors"] == {"base": "cannot_connect"}
+        assert reauth_hass.config_entries.async_entries(DOMAIN) == []
+
+    async def test_an_unexpected_discovery_error_is_not_swallowed(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker
+    ):
+        aioclient_mock.get(DISCOVERY_URL, exc=RuntimeError("bug"))
 
         with pytest.raises(RuntimeError):
-            await flow._fetch_discovery(session, "https://example.com")
+            await _submit_instance_url(reauth_hass)
 
-    async def test_unexpected_registration_errors_are_not_swallowed(self, flow):
-        session = MagicMock()
-        session.post = AsyncMock(side_effect=RuntimeError("bug"))
+    async def test_an_unexpected_registration_error_is_not_swallowed(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker
+    ):
+        aioclient_mock.get(DISCOVERY_URL, json=DISCOVERY_DOCUMENT)
+        aioclient_mock.post(REGISTRATION_URL, exc=RuntimeError("bug"))
 
         with pytest.raises(RuntimeError):
-            await flow._register_client(session, "https://example.com/register", "https://ha")
+            await _submit_instance_url(reauth_hass)
 
+    async def test_an_instance_that_is_already_configured_is_refused(
+        self, reauth_hass, aioclient_mock: AiohttpClientMocker
+    ):
+        make_entry().add_to_hass(reauth_hass)
+        aioclient_mock.get(DISCOVERY_URL, json=DISCOVERY_DOCUMENT)
 
-class TestAsyncStepUser:
-    @pytest.fixture
-    def flow(self):
-        flow = NocturneOAuth2FlowHandler()
-        flow.hass = MagicMock()
-        with patch(
-            "custom_components.nocturne.config_flow.registration_redirect_uri",
-            return_value="https://ha.example.com/auth/external/callback",
-        ):
-            yield flow
+        result = await _submit_instance_url(reauth_hass)
 
-    @patch(
-        "custom_components.nocturne.config_flow.async_get_clientsession",
-        return_value=AsyncMock(),
-    )
-    @patch(
-        "custom_components.nocturne.config_flow.NocturneApiClient",
-    )
-    async def test_shows_form_when_no_input(self, mock_client_cls, mock_session, flow):
-        result = await flow.async_step_user(None)
-        assert result["type"] == "form"
-        assert result["step_id"] == "user"
-
-    @patch(
-        "custom_components.nocturne.config_flow.async_get_clientsession",
-        return_value=AsyncMock(),
-    )
-    @patch("custom_components.nocturne.config_flow.NocturneApiClient")
-    async def test_connection_failure_shows_error(self, mock_client_cls, mock_session, flow):
-        mock_client_cls.return_value.validate_connection = AsyncMock(return_value=False)
-
-        result = await flow.async_step_user({CONF_INSTANCE_URL: "https://bad.example.com"})
-
-        assert result["type"] == "form"
-        assert result["errors"]["base"] == "cannot_connect"
-
-    @patch(
-        "custom_components.nocturne.config_flow.async_get_clientsession",
-        return_value=AsyncMock(),
-    )
-    @patch("custom_components.nocturne.config_flow.NocturneApiClient")
-    async def test_discovery_failure_shows_error(self, mock_client_cls, mock_session, flow):
-        mock_client_cls.return_value.validate_connection = AsyncMock(return_value=True)
-        flow._fetch_discovery = AsyncMock(return_value=None)
-
-        result = await flow.async_step_user({CONF_INSTANCE_URL: "https://example.com"})
-
-        assert result["type"] == "form"
-        assert result["errors"]["base"] == "cannot_connect"
-
-    @patch(
-        "custom_components.nocturne.config_flow.async_get_clientsession",
-        return_value=AsyncMock(),
-    )
-    @patch("custom_components.nocturne.config_flow.NocturneApiClient")
-    async def test_dcr_failure_shows_error(self, mock_client_cls, mock_session, flow):
-        mock_client_cls.return_value.validate_connection = AsyncMock(return_value=True)
-        flow._fetch_discovery = AsyncMock(return_value={
-            "authorization_endpoint": "https://example.com/oauth/authorize",
-            "token_endpoint": "https://example.com/oauth/token",
-        })
-        flow._register_client = AsyncMock(return_value=None)
-        flow.async_set_unique_id = AsyncMock()
-        flow._abort_if_unique_id_configured = MagicMock()
-
-        result = await flow.async_step_user({CONF_INSTANCE_URL: "https://example.com"})
-
-        assert result["type"] == "form"
-        assert result["errors"]["base"] == "cannot_connect"
+        assert result["type"] is FlowResultType.ABORT
+        assert result["reason"] == "already_configured"
+        assert _requested(aioclient_mock) == [DISCOVERY_URL]
 
 
 class TestReauth:
@@ -486,35 +451,3 @@ class TestRefreshToken:
 
         assert token["access_token"] == "new-access"
         assert token["refresh_token"] == "old-refresh"
-
-
-class TestAsyncOAuthCreateEntry:
-    async def test_persists_all_oauth_data(self):
-        flow = NocturneOAuth2FlowHandler()
-        flow.hass = MagicMock()
-        flow.context = {"source": SOURCE_USER}
-        flow._instance_url = "https://example.com"
-        flow.flow_impl = MagicMock(
-            client_id="test-client-id", redirect_uri="https://ha.example.com/auth/external/callback"
-        )
-        flow._authorize_url = "https://example.com/oauth/authorize"
-        flow._token_url = "https://example.com/oauth/token"
-        flow.async_create_entry = MagicMock(return_value={"type": "create_entry"})
-
-        await flow.async_oauth_create_entry({"token": "abc"})
-
-        create_call = flow.async_create_entry.call_args
-        data = create_call.kwargs["data"]
-        assert data[CONF_INSTANCE_URL] == "https://example.com"
-        assert data[CONF_CLIENT_ID] == "test-client-id"
-        assert data[CONF_AUTHORIZE_URL] == "https://example.com/oauth/authorize"
-        assert data[CONF_TOKEN_URL] == "https://example.com/oauth/token"
-        assert data[CONF_REDIRECT_URI] == "https://ha.example.com/auth/external/callback"
-        assert data[CONF_REQUESTED_SCOPES] == DEFAULT_SCOPES
-
-
-class TestOptionsFlow:
-    def test_get_options_flow_does_not_assign_config_entry(self):
-        handler = NocturneOAuth2FlowHandler.async_get_options_flow(MagicMock())
-
-        assert isinstance(handler, NocturneOptionsFlowHandler)

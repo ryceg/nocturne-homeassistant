@@ -1,7 +1,7 @@
 """Tests for the SignalR connection manager."""
 import asyncio
 import logging
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from homeassistant.exceptions import HomeAssistantError
@@ -9,77 +9,56 @@ from pysignalr.exceptions import AuthorizationError, NegotiationFailure
 from websockets.exceptions import ConnectionClosed
 
 from custom_components.nocturne import signalr
-from custom_components.nocturne.signalr import NocturneSignalRClient
+from custom_components.nocturne.auth import oauth_token_provider
+
+from .conftest import deliver, issue_tokens, make_signalr_client
 
 
 @pytest.fixture
-def mock_hass():
-    hass = MagicMock()
-    hass.bus = MagicMock()
-    hass.bus.async_fire = MagicMock()
-    return hass
-
-
-@pytest.fixture
-def signalr_client(mock_hass):
-    return NocturneSignalRClient(
-        hass=mock_hass,
-        instance_url="https://nocturne.example.com",
-        instance_id="test-client-id",
-        async_get_token=AsyncMock(return_value="test-token"),
-        on_glucose_reading=AsyncMock(),
-        on_alert_dispatch=AsyncMock(),
-        on_alert_resolved=AsyncMock(),
-        on_alert_acknowledged=AsyncMock(),
-    )
+def signalr_client(hass):
+    return make_signalr_client(hass)
 
 
 def test_hub_url(signalr_client):
     assert signalr_client.hub_url == "https://nocturne.example.com/hubs/home-assistant"
 
 
-async def _deliver(signalr_client, event, payload):
-    handlers = {}
-    stub = MagicMock()
-    stub.on.side_effect = handlers.__setitem__
-    signalr_client._subscribe_events(stub)
-    await handlers[event](payload)
+CALLBACKS = {
+    "glucose_reading": "_on_glucose_reading",
+    "alert_dispatch": "_on_alert_dispatch",
+    "alert_resolved": "_on_alert_resolved",
+    "alert_acknowledged": "_on_alert_acknowledged",
+}
 
 
-@pytest.mark.asyncio
-async def test_on_glucose_reading_callback(signalr_client):
-    test_data = {"value": 120, "trend": "Flat"}
-    await _deliver(signalr_client, "glucose_reading", test_data)
-    signalr_client._on_glucose_reading.assert_awaited_once_with(test_data)
+@pytest.mark.parametrize("event", CALLBACKS)
+async def test_each_event_reaches_only_its_own_callback(signalr_client, event):
+    payload = {"excursionId": "test-uuid"}
+
+    await deliver(signalr_client, event, payload)
+
+    for name, attribute in CALLBACKS.items():
+        callback = getattr(signalr_client, attribute)
+        if name == event:
+            callback.assert_awaited_once_with(payload)
+        else:
+            callback.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_on_alert_dispatch_callback(signalr_client):
-    test_payload = {"excursionId": "test-uuid", "ruleName": "Urgent Low", "severity": "critical"}
-    await _deliver(signalr_client, "alert_dispatch", test_payload)
-    signalr_client._on_alert_dispatch.assert_awaited_once_with(test_payload)
-
-
-@pytest.mark.asyncio
-async def test_on_alert_resolved_callback(signalr_client):
-    test_payload = {"excursionId": "test-uuid"}
-    await _deliver(signalr_client, "alert_resolved", test_payload)
-    signalr_client._on_alert_resolved.assert_awaited_once_with(test_payload)
-
-
-@pytest.mark.asyncio
-async def test_on_alert_acknowledged_callback(signalr_client):
-    test_payload = {"excursionId": "test-uuid", "acknowledgedBy": "homeassistant:test"}
-    await _deliver(signalr_client, "alert_acknowledged", test_payload)
-    signalr_client._on_alert_acknowledged.assert_awaited_once_with(test_payload)
-
-
-@pytest.mark.asyncio
 async def test_handle_unwraps_list(signalr_client):
-    """SignalR sends args as a list — handler should unwrap."""
-    test_data = [{"value": 120}]
-    await _deliver(signalr_client, "glucose_reading", test_data)
+    """SignalR sends args as a list, so the handler unwraps the first."""
+    await deliver(signalr_client, "glucose_reading", [{"value": 120}])
+
     signalr_client._on_glucose_reading.assert_awaited_once_with({"value": 120})
+
+
+async def test_a_failing_callback_does_not_stop_later_events(signalr_client):
+    signalr_client._on_alert_dispatch.side_effect = RuntimeError("boom")
+
+    await deliver(signalr_client, "alert_dispatch", {"excursionId": "a"})
+    await deliver(signalr_client, "alert_dispatch", {"excursionId": "b"})
+
+    assert signalr_client._on_alert_dispatch.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -95,6 +74,7 @@ async def test_acknowledge_returns_when_server_completes(signalr_client, connect
 
     await signalr_client.acknowledge("exc-id", "homeassistant:test")
 
+    assert hub.sent == [("Acknowledge", ["exc-id", "homeassistant:test"])]
     assert hub._invocation_handlers == {}
 
 
@@ -151,20 +131,10 @@ async def test_acknowledge_raises_when_connection_drops_during_send(
 
 
 @pytest.mark.asyncio
-async def test_disconnect_callback_called_on_disconnected(mock_hass):
+async def test_disconnect_callback_called_on_disconnected(hass):
     """on_disconnected callback is invoked when _on_disconnected fires."""
     on_disconnect = AsyncMock()
-    client = NocturneSignalRClient(
-        hass=mock_hass,
-        instance_url="https://nocturne.example.com",
-        instance_id="test-client-id",
-        async_get_token=AsyncMock(return_value="test-token"),
-        on_glucose_reading=AsyncMock(),
-        on_alert_dispatch=AsyncMock(),
-        on_alert_resolved=AsyncMock(),
-        on_alert_acknowledged=AsyncMock(),
-        on_disconnected=on_disconnect,
-    )
+    client = make_signalr_client(hass, on_disconnected=on_disconnect)
     client._connected = True
 
     await client._on_disconnected()
@@ -228,16 +198,6 @@ def fake_pysignalr(monkeypatch):
     return script, instances
 
 
-@pytest.fixture
-def mock_entry():
-    entry = MagicMock()
-    entry.entry_id = "entry-1"
-    entry.async_create_background_task = MagicMock(
-        side_effect=lambda hass, coro, name: asyncio.create_task(coro)
-    )
-    return entry
-
-
 def _token_sequence():
     count = 0
 
@@ -249,17 +209,8 @@ def _token_sequence():
     return AsyncMock(side_effect=_next_token)
 
 
-def _client(mock_hass, async_get_token):
-    return NocturneSignalRClient(
-        hass=mock_hass,
-        instance_url="https://nocturne.example.com",
-        instance_id="test-client-id",
-        async_get_token=async_get_token,
-        on_glucose_reading=AsyncMock(),
-        on_alert_dispatch=AsyncMock(),
-        on_alert_resolved=AsyncMock(),
-        on_alert_acknowledged=AsyncMock(),
-    )
+def _client(hass, async_get_token):
+    return make_signalr_client(hass, async_get_token=async_get_token)
 
 
 async def _until(predicate) -> None:
@@ -269,13 +220,13 @@ async def _until(predicate) -> None:
 
 
 async def test_reconnect_after_unauthorised_attempt_uses_fresh_token(
-    mock_hass, mock_entry, fake_pysignalr
+    hass, entry, fake_pysignalr
 ):
     script, instances = fake_pysignalr
     script.append(AuthorizationError())
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
 
     assert [c.headers["Authorization"] for c in instances] == [
@@ -287,13 +238,13 @@ async def test_reconnect_after_unauthorised_attempt_uses_fresh_token(
 
 
 async def test_dropped_connection_reconnects_with_fresh_token(
-    mock_hass, mock_entry, fake_pysignalr
+    hass, entry, fake_pysignalr
 ):
     script, instances = fake_pysignalr
     script.append("drop")
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: len(instances) == 2 and client.connected)
 
     assert instances[0].headers["Authorization"] == "Bearer token-1"
@@ -302,12 +253,12 @@ async def test_dropped_connection_reconnects_with_fresh_token(
     await client.stop()
 
 
-async def test_keeps_retrying_past_old_retry_budget(mock_hass, mock_entry, fake_pysignalr):
+async def test_keeps_retrying_past_old_retry_budget(hass, entry, fake_pysignalr):
     script, instances = fake_pysignalr
     script.extend(NegotiationFailure() for _ in range(25))
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
 
     assert len(instances) == 26
@@ -315,23 +266,23 @@ async def test_keeps_retrying_past_old_retry_budget(mock_hass, mock_entry, fake_
     await client.stop()
 
 
-async def test_refused_token_refresh_keeps_retrying(mock_hass, mock_entry, fake_pysignalr):
+async def test_refused_token_refresh_keeps_retrying(hass, entry, fake_pysignalr):
     _, instances = fake_pysignalr
     get_token = AsyncMock(side_effect=[HomeAssistantError("refused"), "token-ok"])
-    client = _client(mock_hass, get_token)
+    client = _client(hass, get_token)
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
 
     assert [c.headers["Authorization"] for c in instances] == ["Bearer token-ok"]
     await client.stop()
 
 
-async def test_stop_ends_the_loop(mock_hass, mock_entry, fake_pysignalr):
+async def test_stop_ends_the_loop(hass, entry, fake_pysignalr):
     _, instances = fake_pysignalr
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
     await client.stop()
     for _ in range(10):
@@ -340,15 +291,38 @@ async def test_stop_ends_the_loop(mock_hass, mock_entry, fake_pysignalr):
     assert client._task.done()
     assert not client.connected
     assert len(instances) == 1
-    mock_entry.async_create_background_task.assert_called_once()
-    assert mock_entry.async_create_background_task.call_args.kwargs["name"]
 
 
-async def test_https_hub_uses_home_assistant_ssl_context(mock_hass, mock_entry, fake_pysignalr):
+async def test_the_loop_is_an_entry_background_task(hass, entry, fake_pysignalr):
+    client = _client(hass, _token_sequence())
+    client.start(entry)
+    await _until(lambda: client.connected)
+
+    await entry._async_process_on_unload(hass)
+
+    assert client._task.cancelled()
+
+
+async def test_every_reconnect_refreshes_an_expired_oauth_token(
+    hass, entry, oauth_session, aioclient_mock, fake_pysignalr
+):
+    script, instances = fake_pysignalr
+    script.append("drop")
+    issue_tokens(aioclient_mock, "oauth-1", "oauth-2", expires_in=0)
+    client = _client(hass, oauth_token_provider(oauth_session))
+
+    client.start(entry)
+    await _until(lambda: len(instances) == 2 and client.connected)
+
+    assert [c.headers["Authorization"] for c in instances] == ["Bearer oauth-1", "Bearer oauth-2"]
+    await client.stop()
+
+
+async def test_https_hub_uses_home_assistant_ssl_context(hass, entry, fake_pysignalr):
     _, instances = fake_pysignalr
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
 
     assert instances[0].ssl is signalr.get_default_context()
@@ -359,13 +333,13 @@ async def test_https_hub_uses_home_assistant_ssl_context(mock_hass, mock_entry, 
     "error", [RuntimeError("Connection is closed"), AttributeError("unexpected")]
 )
 async def test_error_after_open_does_not_end_the_loop(
-    mock_hass, mock_entry, fake_pysignalr, error
+    hass, entry, fake_pysignalr, error
 ):
     script, instances = fake_pysignalr
     script.append(("open", error))
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: len(instances) == 2 and client.connected)
 
     assert instances[1].headers["Authorization"] == "Bearer token-2"
@@ -387,67 +361,67 @@ def recorded_delays(monkeypatch):
     return delays
 
 
-async def _delays_for(mock_hass, mock_entry, fake_pysignalr, monkeypatch, steps, delays):
+async def _delays_for(hass, entry, fake_pysignalr, monkeypatch, steps, delays):
     script, instances = fake_pysignalr
     monkeypatch.setattr(signalr, "RECONNECT_INITIAL_DELAY", 1)
     monkeypatch.setattr(signalr, "RECONNECT_MAX_DELAY", 8)
     script.extend(steps)
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: len(instances) == len(steps) + 1 and client.connected)
     await client.stop()
     return delays
 
 
 async def test_backoff_doubles_up_to_the_cap(
-    mock_hass, mock_entry, fake_pysignalr, monkeypatch, recorded_delays
+    hass, entry, fake_pysignalr, monkeypatch, recorded_delays
 ):
     steps = [NegotiationFailure() for _ in range(6)]
 
     delays = await _delays_for(
-        mock_hass, mock_entry, fake_pysignalr, monkeypatch, steps, recorded_delays
+        hass, entry, fake_pysignalr, monkeypatch, steps, recorded_delays
     )
 
     assert delays == [1, 2, 4, 8, 8, 8]
 
 
 async def test_backoff_resets_after_a_stable_connection(
-    mock_hass, mock_entry, fake_pysignalr, monkeypatch, recorded_delays
+    hass, entry, fake_pysignalr, monkeypatch, recorded_delays
 ):
     monkeypatch.setattr(signalr, "STABLE_CONNECTION_SECONDS", 0)
     steps = [NegotiationFailure(), NegotiationFailure(), NegotiationFailure(), "drop"]
     steps.append(NegotiationFailure())
 
     delays = await _delays_for(
-        mock_hass, mock_entry, fake_pysignalr, monkeypatch, steps, recorded_delays
+        hass, entry, fake_pysignalr, monkeypatch, steps, recorded_delays
     )
 
     assert delays == [1, 2, 4, 1, 2]
 
 
 async def test_backoff_keeps_growing_after_a_short_connection(
-    mock_hass, mock_entry, fake_pysignalr, monkeypatch, recorded_delays
+    hass, entry, fake_pysignalr, monkeypatch, recorded_delays
 ):
     steps = [NegotiationFailure(), NegotiationFailure(), NegotiationFailure(), "drop"]
     steps.append(NegotiationFailure())
 
     delays = await _delays_for(
-        mock_hass, mock_entry, fake_pysignalr, monkeypatch, steps, recorded_delays
+        hass, entry, fake_pysignalr, monkeypatch, steps, recorded_delays
     )
 
     assert delays == [1, 2, 4, 8, 8]
 
 
 async def test_outage_warns_once_and_reconnect_is_logged(
-    mock_hass, mock_entry, fake_pysignalr, caplog
+    hass, entry, fake_pysignalr, caplog
 ):
     script, instances = fake_pysignalr
     script.extend(NegotiationFailure() for _ in range(5))
-    client = _client(mock_hass, _token_sequence())
+    client = _client(hass, _token_sequence())
     caplog.set_level(logging.DEBUG, logger=signalr.__name__)
 
-    client.start(mock_entry)
+    client.start(entry)
     await _until(lambda: client.connected)
     await client.stop()
 
