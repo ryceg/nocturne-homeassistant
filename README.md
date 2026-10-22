@@ -44,8 +44,8 @@ Sensors are registered dynamically based on available data. CGM-only users will 
 
 | Service | Fields |
 |---------|--------|
-| `nocturne.log_carbs` | `carbs` (g), `notes` (optional) |
-| `nocturne.log_insulin` | `insulin` (U), `notes` (optional) |
+| `nocturne.log_carbs` | `carbs` (g) |
+| `nocturne.log_insulin` | `insulin` (U) |
 | `nocturne.log_glucose` | `value` (mg/dL), `type` (sgv/mbg) |
 | `nocturne.log_activity` | `duration` (min), `activity_type`, `notes` (optional) |
 

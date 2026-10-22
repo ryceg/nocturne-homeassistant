@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -84,6 +84,33 @@ class TestSdkSendsBearerToken:
                 await client.get_latest_glucose()
 
         assert captured["headers"]["Authorization"] == "Bearer test-token"
+
+
+STAMP = datetime(2026, 10, 22, 1, 2, 3, tzinfo=UTC)
+
+
+class TestCreateGlucose:
+    async def test_meter_reading_goes_to_the_meter_endpoint(self, client):
+        with (
+            patch("custom_components.nocturne.api.MeterGlucoseApi") as meter_cls,
+            patch("custom_components.nocturne.api.SensorGlucoseApi") as sensor_cls,
+        ):
+            await client.create_meter_glucose(mgdl=110.0, timestamp=STAMP, data_source="ha")
+
+        request = meter_cls.return_value.meter_glucose_create.call_args[0][0]
+        assert (request.mgdl, request.timestamp, request.data_source) == (110.0, STAMP, "ha")
+        sensor_cls.return_value.sensor_glucose_create.assert_not_called()
+
+    async def test_sensor_reading_goes_to_the_sensor_endpoint(self, client):
+        with (
+            patch("custom_components.nocturne.api.MeterGlucoseApi") as meter_cls,
+            patch("custom_components.nocturne.api.SensorGlucoseApi") as sensor_cls,
+        ):
+            await client.create_glucose(mgdl=110.0, timestamp=STAMP, data_source="ha")
+
+        request = sensor_cls.return_value.sensor_glucose_create.call_args[0][0]
+        assert (request.mgdl, request.timestamp, request.data_source) == (110.0, STAMP, "ha")
+        meter_cls.return_value.meter_glucose_create.assert_not_called()
 
 
 class TestGetDailySummaryScope:

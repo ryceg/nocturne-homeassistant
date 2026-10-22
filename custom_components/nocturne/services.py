@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
@@ -10,6 +9,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_CONFIG_ENTRY_ID
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 from nocturne_py import (
     CreateBolusRequest,
     CreateCarbIntakeRequest,
@@ -28,13 +28,14 @@ SERVICE_LOG_GLUCOSE = "log_glucose"
 SERVICE_LOG_ACTIVITY = "log_activity"
 SERVICE_ACKNOWLEDGE_ALERT = "acknowledge_alert"
 
+DEFAULT_ACTIVITY_TYPE = "exercise"
+
 ENTRY_SCHEMA = {vol.Optional(ATTR_CONFIG_ENTRY_ID): str}
 
 LOG_CARBS_SCHEMA = vol.Schema(
     {
         **ENTRY_SCHEMA,
         vol.Required("carbs"): vol.Coerce(float),
-        vol.Optional("notes", default=""): str,
     }
 )
 
@@ -42,7 +43,6 @@ LOG_INSULIN_SCHEMA = vol.Schema(
     {
         **ENTRY_SCHEMA,
         vol.Required("insulin"): vol.Coerce(float),
-        vol.Optional("notes", default=""): str,
     }
 )
 
@@ -58,8 +58,8 @@ LOG_ACTIVITY_SCHEMA = vol.Schema(
     {
         **ENTRY_SCHEMA,
         vol.Required("duration"): vol.Coerce(int),
-        vol.Optional("activity_type", default=""): str,
-        vol.Optional("notes", default=""): str,
+        vol.Optional("activity_type", default=DEFAULT_ACTIVITY_TYPE): str,
+        vol.Optional("notes"): str,
     }
 )
 
@@ -108,6 +108,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         client = async_get_entry(hass, call).runtime_data.client
         await client.create_carb_intake(
             CreateCarbIntakeRequest(
+                timestamp=dt_util.utcnow(),
                 carbs=call.data["carbs"],
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
             )
@@ -117,6 +118,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         client = async_get_entry(hass, call).runtime_data.client
         await client.create_bolus(
             CreateBolusRequest(
+                timestamp=dt_util.utcnow(),
                 insulin=call.data["insulin"],
                 data_source=DATA_SOURCE_HOME_ASSISTANT,
             )
@@ -124,23 +126,31 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def handle_log_glucose(call: ServiceCall) -> None:
         client = async_get_entry(hass, call).runtime_data.client
-        await client.create_glucose(
+        create = (
+            client.create_meter_glucose
+            if call.data["type"] == "mbg"
+            else client.create_glucose
+        )
+        await create(
             mgdl=call.data["value"],
             data_source=DATA_SOURCE_HOME_ASSISTANT,
+            timestamp=dt_util.utcnow(),
         )
 
     async def handle_log_activity(call: ServiceCall) -> None:
         client = async_get_entry(hass, call).runtime_data.client
-        now = datetime.now(UTC)
+        now = dt_util.utcnow()
         start_mills = int(now.timestamp() * 1000)
         duration_mins = call.data["duration"]
         end_mills = start_mills + (duration_mins * 60 * 1000)
         await client.create_state_span(
             CreateStateSpanRequest(
                 category=StateSpanCategory.EXERCISE,
+                state=call.data["activity_type"],
                 start_mills=start_mills,
                 end_mills=end_mills,
                 source=DATA_SOURCE_HOME_ASSISTANT,
+                metadata={"notes": notes} if (notes := call.data.get("notes")) else None,
             )
         )
 

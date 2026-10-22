@@ -17,11 +17,6 @@ log_carbs:
           min: 0
           max: 500
           unit_of_measurement: g
-    notes:
-      name: Notes
-      description: Optional notes.
-      selector:
-        text:
 
 log_insulin:
   name: Log Insulin
@@ -43,11 +38,6 @@ log_insulin:
           max: 100
           step: 0.05
           unit_of_measurement: U
-    notes:
-      name: Notes
-      description: Optional notes.
-      selector:
-        text:
 
 log_glucose:
   name: Log Glucose
@@ -100,6 +90,7 @@ log_activity:
     activity_type:
       name: Activity Type
       description: Type of activity.
+      default: exercise
       selector:
         text:
     notes:
