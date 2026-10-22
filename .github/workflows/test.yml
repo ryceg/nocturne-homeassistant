@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - run: pip install ruff
       - run: ruff check custom_components/
 
@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - run: |
           pip install pytest pytest-asyncio pytest-homeassistant-custom-component
           python -c "import json; print('\n'.join(json.load(open('custom_components/nocturne/manifest.json'))['requirements']))" > requirements.txt
