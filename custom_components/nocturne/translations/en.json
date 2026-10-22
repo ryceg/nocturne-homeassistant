@@ -14,11 +14,13 @@
       }
     },
     "error": {
-      "cannot_connect": "Unable to connect to that Nocturne instance. Check the URL and try again."
+      "cannot_connect": "Unable to connect to that Nocturne instance. Check the URL and try again.",
+      "no_redirect_url": "Home Assistant has no external URL and My Home Assistant is not enabled. Set an external URL or enable My Home Assistant, then try again."
     },
     "abort": {
       "already_configured": "This Nocturne instance is already configured.",
       "reauth_successful": "Reauthentication was successful.",
+      "no_url_available": "The external URL this integration was registered with is no longer configured in Home Assistant. Set it again and retry. [More info]({docs_url})",
       "wrong_instance": "You signed in to a different Nocturne instance than the one this entry uses."
     }
   },

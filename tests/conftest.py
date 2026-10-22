@@ -72,6 +72,14 @@ async def reauth_hass(hass: HomeAssistant, enable_custom_integrations: None) -> 
 
 
 @pytest.fixture
+async def my_hass(hass: HomeAssistant, enable_custom_integrations: None) -> HomeAssistant:
+    hass.config.external_url = None
+    hass.config.components.add("my")
+    assert await async_setup_component(hass, "auth", {})
+    return hass
+
+
+@pytest.fixture
 def glucose_data() -> dict:
     """Realistic glucose coordinator data using SDK models."""
     return {
