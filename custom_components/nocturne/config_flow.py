@@ -5,9 +5,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import voluptuous as vol
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientSession
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
@@ -39,6 +40,13 @@ _LOGGER = logging.getLogger(__name__)
 
 def _external_callback_uri(hass: HomeAssistant) -> str:
     return f"{get_url(hass, allow_internal=False, allow_ip=False)}{AUTH_CALLBACK_PATH}"
+
+
+def _rebase_url(endpoint_url: str, instance_url: str) -> str:
+    """Rewrite a discovery URL to use the instance's scheme and host."""
+    endpoint = urlparse(endpoint_url)
+    instance = urlparse(instance_url)
+    return urlunparse(endpoint._replace(scheme=instance.scheme, netloc=instance.netloc))
 
 
 def registration_redirect_uri(hass: HomeAssistant) -> str:
@@ -178,23 +186,15 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                     await self.async_set_unique_id(url)
                     self._abort_if_unique_id_configured()
 
-                    def _rebase_url(endpoint_url: str) -> str:
-                        """Rewrite discovery URL to use the tenant instance origin."""
-                        from urllib.parse import urlparse, urlunparse
-
-                        ep = urlparse(endpoint_url)
-                        inst = urlparse(url)
-                        return urlunparse(ep._replace(
-                            scheme=inst.scheme, netloc=inst.netloc
-                        ))
-
                     self._authorize_url = _rebase_url(
                         self._discovery.get("authorization_endpoint")
-                        or self._discovery["authorizationEndpoint"]
+                        or self._discovery["authorizationEndpoint"],
+                        url,
                     )
                     self._token_url = _rebase_url(
                         self._discovery.get("token_endpoint")
-                        or self._discovery["tokenEndpoint"]
+                        or self._discovery["tokenEndpoint"],
+                        url,
                     )
 
                     # Dynamic Client Registration (RFC 7591)
@@ -203,7 +203,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
                         or self._discovery.get("registrationEndpoint")
                     )
                     registration_endpoint = (
-                        _rebase_url(raw_registration)
+                        _rebase_url(raw_registration, url)
                         if raw_registration
                         else f"{url}/api/oauth/register"
                     )
@@ -285,7 +285,7 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
             )
             if resp.status == 200:
                 return await resp.json()
-        except Exception:
+        except (ClientError, TimeoutError, ValueError):
             _LOGGER.exception("Failed to fetch discovery document")
         return None
 
@@ -310,6 +310,6 @@ class NocturneOAuth2FlowHandler(AbstractOAuth2FlowHandler, domain=DOMAIN):
             if resp.status in (200, 201):
                 return await resp.json()
             _LOGGER.error("DCR failed with status %s", resp.status)
-        except Exception:
+        except (ClientError, TimeoutError, ValueError):
             _LOGGER.exception("Failed to register OAuth client")
         return None

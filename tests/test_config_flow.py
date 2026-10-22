@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from aiohttp import ClientConnectionError, ContentTypeError
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -18,6 +20,7 @@ from custom_components.nocturne.config_flow import (
     NocturneOAuth2FlowHandler,
     NocturneOAuth2Implementation,
     NocturneOptionsFlowHandler,
+    _rebase_url,
 )
 from custom_components.nocturne.const import (
     CONF_AUTHORIZE_URL,
@@ -226,6 +229,79 @@ class TestUserFlow:
         assert result["step_id"] == "user"
         assert result["errors"] == {"base": "no_redirect_url"}
         assert aioclient_mock.call_count == 0
+
+
+class TestRebaseUrl:
+    def test_replaces_scheme_and_host_and_keeps_path_and_query(self):
+        rebased = _rebase_url(
+            "http://internal:8080/oauth/authorize?a=1&b=2", "https://nightscout.example.com"
+        )
+
+        assert rebased == "https://nightscout.example.com/oauth/authorize?a=1&b=2"
+
+
+class TestDiscoveryAndRegistrationFailures:
+    @pytest.fixture
+    def flow(self):
+        return NocturneOAuth2FlowHandler()
+
+    @pytest.fixture(
+        params=[
+            ClientConnectionError("down"),
+            TimeoutError(),
+            ContentTypeError(MagicMock(), ()),
+            json.JSONDecodeError("bad", "", 0),
+        ],
+        ids=["connection", "timeout", "content-type", "bad-json"],
+    )
+    def failure(self, request):
+        return request.param
+
+    async def test_discovery_returns_none_when_the_call_fails(self, flow, failure):
+        session = MagicMock()
+        session.get = AsyncMock(side_effect=failure)
+
+        assert await flow._fetch_discovery(session, "https://example.com") is None
+
+    async def test_discovery_returns_none_when_the_body_is_not_json(self, flow, failure):
+        session = MagicMock()
+        session.get = AsyncMock(
+            return_value=MagicMock(status=200, json=AsyncMock(side_effect=failure))
+        )
+
+        assert await flow._fetch_discovery(session, "https://example.com") is None
+
+    async def test_registration_returns_none_when_the_call_fails(self, flow, failure):
+        session = MagicMock()
+        session.post = AsyncMock(side_effect=failure)
+
+        result = await flow._register_client(session, "https://example.com/register", "https://ha")
+
+        assert result is None
+
+    async def test_registration_returns_none_when_the_body_is_not_json(self, flow, failure):
+        session = MagicMock()
+        session.post = AsyncMock(
+            return_value=MagicMock(status=201, json=AsyncMock(side_effect=failure))
+        )
+
+        result = await flow._register_client(session, "https://example.com/register", "https://ha")
+
+        assert result is None
+
+    async def test_unexpected_discovery_errors_are_not_swallowed(self, flow):
+        session = MagicMock()
+        session.get = AsyncMock(side_effect=RuntimeError("bug"))
+
+        with pytest.raises(RuntimeError):
+            await flow._fetch_discovery(session, "https://example.com")
+
+    async def test_unexpected_registration_errors_are_not_swallowed(self, flow):
+        session = MagicMock()
+        session.post = AsyncMock(side_effect=RuntimeError("bug"))
+
+        with pytest.raises(RuntimeError):
+            await flow._register_client(session, "https://example.com/register", "https://ha")
 
 
 class TestAsyncStepUser:
