@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
@@ -12,8 +11,6 @@ import pytest
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.setup import async_setup_component
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import AiohttpClientMocker
 
 from custom_components.nocturne.config_flow import (
@@ -25,43 +22,13 @@ from custom_components.nocturne.const import (
     CONF_AUTHORIZE_URL,
     CONF_CLIENT_ID,
     CONF_INSTANCE_URL,
+    CONF_REQUESTED_SCOPES,
     CONF_TOKEN_URL,
     DEFAULT_SCOPES,
     DOMAIN,
 )
 
-INSTANCE_URL = "https://nocturne.example.com"
-AUTHORIZE_URL = f"{INSTANCE_URL}/oauth/authorize"
-TOKEN_URL = f"{INSTANCE_URL}/oauth/token"
-CLIENT_ID = "stored-client-id"
-
-
-def _entry(unique_id: str = INSTANCE_URL) -> MockConfigEntry:
-    return MockConfigEntry(
-        domain=DOMAIN,
-        title="Nocturne",
-        unique_id=unique_id,
-        data={
-            "auth_implementation": DOMAIN,
-            "token": {
-                "access_token": "old-access",
-                "refresh_token": "old-refresh",
-                "expires_at": time.time() - 10,
-                "expires_in": 3600,
-            },
-            CONF_INSTANCE_URL: INSTANCE_URL,
-            CONF_CLIENT_ID: CLIENT_ID,
-            CONF_AUTHORIZE_URL: AUTHORIZE_URL,
-            CONF_TOKEN_URL: TOKEN_URL,
-        },
-    )
-
-
-@pytest.fixture
-async def reauth_hass(hass: HomeAssistant, enable_custom_integrations: None) -> HomeAssistant:
-    hass.config.external_url = "https://ha.example.com"
-    assert await async_setup_component(hass, "auth", {})
-    return hass
+from .conftest import AUTHORIZE_URL, CLIENT_ID, INSTANCE_URL, TOKEN_URL, make_entry
 
 
 async def _authorise(hass, hass_client_no_auth, aioclient_mock, entry, token_response):
@@ -260,7 +227,7 @@ class TestReauth:
     async def test_updates_existing_entry_with_its_own_client(
         self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
     ):
-        entry = _entry()
+        entry = make_entry()
         entry.add_to_hass(reauth_hass)
 
         result, setup = await _authorise(
@@ -280,10 +247,22 @@ class TestReauth:
         assert token_request["code"] == "auth-code"
         setup.assert_called_once()
 
+    async def test_stores_the_scopes_it_requested(
+        self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
+    ):
+        entry = make_entry()
+        entry.add_to_hass(reauth_hass)
+
+        await _authorise(
+            reauth_hass, hass_client_no_auth, aioclient_mock, entry, NEW_TOKEN
+        )
+
+        assert entry.data[CONF_REQUESTED_SCOPES] == DEFAULT_SCOPES
+
     async def test_aborts_when_unique_id_disagrees_with_stored_instance(
         self, reauth_hass, hass_client_no_auth, aioclient_mock: AiohttpClientMocker
     ):
-        entry = _entry(unique_id="https://other.example.com")
+        entry = make_entry(unique_id="https://other.example.com")
         entry.add_to_hass(reauth_hass)
 
         result, setup = await _authorise(
@@ -301,7 +280,7 @@ class TestRefreshToken:
         self, hass: HomeAssistant, aioclient_mock: AiohttpClientMocker
     ):
         aioclient_mock.post(TOKEN_URL, json={"access_token": "new-access", "expires_in": 60})
-        impl = NocturneOAuth2Implementation.from_entry_data(hass, _entry().data)
+        impl = NocturneOAuth2Implementation.from_entry_data(hass, make_entry().data)
 
         token = await impl.async_refresh_token(
             {"access_token": "old-access", "refresh_token": "old-refresh", "expires_in": 60}
@@ -330,6 +309,7 @@ class TestAsyncOAuthCreateEntry:
         assert data[CONF_CLIENT_ID] == "test-client-id"
         assert data[CONF_AUTHORIZE_URL] == "https://example.com/oauth/authorize"
         assert data[CONF_TOKEN_URL] == "https://example.com/oauth/token"
+        assert data[CONF_REQUESTED_SCOPES] == DEFAULT_SCOPES
 
 
 class TestOptionsFlow:

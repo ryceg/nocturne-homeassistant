@@ -31,6 +31,7 @@ from .const import (
     CONF_NOTIFY_SERVICES,
     DATA_SOURCE_HOME_ASSISTANT,
     DOMAIN,
+    missing_scopes,
 )
 from .coordinator import DeviceCoordinator, GlucoseCoordinator
 from .signalr import NOT_CONNECTED_MESSAGE, NocturneSignalRClient, TokenProvider
@@ -135,6 +136,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _register_services(hass, entry)
+
+    if missing := missing_scopes(entry.data):
+        _LOGGER.info(
+            "Nocturne now requests scopes %s; starting reauthentication", ", ".join(missing)
+        )
+        entry.async_start_reauth(hass)
 
     return True
 

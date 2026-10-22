@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from homeassistant.core import HomeAssistant
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pysignalr.client import SignalRClient
 from pysignalr.messages import CompletionMessage
 from nocturne_py import (
@@ -19,7 +22,53 @@ from nocturne_py import (
 )
 from nocturne_py.models import DailySummaryDay, ProfileSummary
 
-from custom_components.nocturne.const import DOMAIN
+from custom_components.nocturne.const import (
+    CONF_AUTHORIZE_URL,
+    CONF_CLIENT_ID,
+    CONF_INSTANCE_URL,
+    CONF_TOKEN_URL,
+    DOMAIN,
+)
+
+INSTANCE_URL = "https://nocturne.example.com"
+AUTHORIZE_URL = f"{INSTANCE_URL}/oauth/authorize"
+TOKEN_URL = f"{INSTANCE_URL}/oauth/token"
+CLIENT_ID = "stored-client-id"
+
+
+def make_entry(
+    instance_url: str = INSTANCE_URL,
+    client_id: str = CLIENT_ID,
+    unique_id: str | None = None,
+    expires_in: float = -10,
+    **data: object,
+) -> MockConfigEntry:
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Nocturne",
+        unique_id=unique_id or instance_url,
+        data={
+            "auth_implementation": DOMAIN,
+            "token": {
+                "access_token": "old-access",
+                "refresh_token": f"refresh-{client_id}",
+                "expires_at": time.time() + expires_in,
+                "expires_in": 3600,
+            },
+            CONF_INSTANCE_URL: instance_url,
+            CONF_CLIENT_ID: client_id,
+            CONF_AUTHORIZE_URL: f"{instance_url}/oauth/authorize",
+            CONF_TOKEN_URL: f"{instance_url}/oauth/token",
+            **data,
+        },
+    )
+
+
+@pytest.fixture
+async def reauth_hass(hass: HomeAssistant, enable_custom_integrations: None) -> HomeAssistant:
+    hass.config.external_url = "https://ha.example.com"
+    assert await async_setup_component(hass, "auth", {})
+    return hass
 
 
 @pytest.fixture
