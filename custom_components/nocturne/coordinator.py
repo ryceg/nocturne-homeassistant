@@ -16,7 +16,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 from homeassistant.util import dt as dt_util
-from nocturne_py import ApiException
+from nocturne_py import ApiException, SensorGlucose
 
 from .api import NocturneApiClient
 from .const import DEVICE_UPDATE_INTERVAL_SECONDS, GLUCOSE_UPDATE_INTERVAL_SECONDS
@@ -80,13 +80,18 @@ class GlucoseCoordinator(NocturneCoordinator):
             hass, config_entry, client, "Nocturne Glucose", GLUCOSE_UPDATE_INTERVAL_SECONDS
         )
 
-    async def async_handle_glucose_push(self) -> None:
-        """Refresh now in response to a SignalR glucose_reading.
+    def async_handle_glucose_push(self, payload: dict[str, Any]) -> None:
+        """Take the current reading from a SignalR glucose_reading.
 
-        The push carries legacy Entry objects, not this coordinator's data shape,
-        and APS state is not pushed at all, so the push only triggers a poll.
+        The push carries only new readings, oldest first, so the last is current.
+        APS state and corrections to stored readings are not pushed; the poll
+        still picks those up.
         """
-        await self.async_request_refresh()
+        readings = payload.get("readings") or []
+        if not readings or self.data is None:
+            return
+        reading = SensorGlucose.from_dict(readings[-1])
+        self.async_set_updated_data({**self.data, "glucose": reading})
 
     async def _async_fetch(self) -> dict[str, Any]:
         return {

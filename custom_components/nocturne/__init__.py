@@ -88,7 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NocturneConfigEntry) -> 
     alert_handler = NocturneAlertHandler(hass, notify_services, lambda: _display_name(entry))
 
     async def _on_glucose_reading(data: dict) -> None:
-        await glucose_coordinator.async_handle_glucose_push()
+        glucose_coordinator.async_handle_glucose_push(data)
 
     async def _on_disconnected() -> None:
         _LOGGER.info("SignalR disconnected")

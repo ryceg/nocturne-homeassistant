@@ -230,7 +230,13 @@ class TestResolved:
         await _resolve(hass, handler)
 
         assert [event.data for event in events] == [
-            {"excursion_id": fixtures.EXCURSION_ID, "resolved_at": "2026-05-14T12:30:00Z"}
+            {
+                "excursion_id": fixtures.EXCURSION_ID,
+                "alert_rule_id": fixtures.ALERT_RULE_ID,
+                "rule_name": "Urgent Low",
+                "reason": "hysteresis",
+                "resolved_at": "2026-05-14T12:30:00Z",
+            }
         ]
         assert notifications.open == {}
         assert notifications.dismissed == [NOTIFICATION_ID]
@@ -240,7 +246,7 @@ class TestAcknowledged:
     async def test_an_excursion_acknowledgement_fires_the_event(self, hass, handler):
         events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
 
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged())
 
         assert [event.data for event in events] == [
             {
@@ -255,7 +261,7 @@ class TestAcknowledged:
     ):
         await _dispatch(hass, handler)
 
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged())
 
         assert list(notifications.open) == [NOTIFICATION_ID]
         assert (
@@ -269,13 +275,13 @@ class TestAcknowledged:
     ):
         events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
 
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged())
 
         assert len(events) == 1
         assert notifications.created == []
         assert notifications.dismissed == []
 
-    async def test_a_tenant_wide_acknowledgement_dismisses_every_open_notification(
+    async def test_acknowledging_several_excursions_marks_each_notification(
         self, hass, handler, notifications, clock
     ):
         events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_ACKNOWLEDGED)
@@ -286,25 +292,20 @@ class TestAcknowledged:
             excursionId=fixtures.OTHER_EXCURSION_ID,
             instanceId=fixtures.OTHER_INSTANCE_ID,
         )
-        created = len(notifications.created)
 
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_tenant_wide())
+        await _acknowledge(
+            hass,
+            handler,
+            fixtures.alert_acknowledged(fixtures.EXCURSION_ID, fixtures.OTHER_EXCURSION_ID),
+        )
 
-        assert notifications.open == {}
-        assert sorted(notifications.dismissed) == sorted([NOTIFICATION_ID, OTHER_NOTIFICATION_ID])
-        assert len(notifications.created) == created
-        assert events[0].data["excursion_id"] is None
-
-    async def test_a_tenant_wide_acknowledgement_forgets_the_excursions_it_dismissed(
-        self, hass, handler, notifications, clock
-    ):
-        await _dispatch(hass, handler)
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_tenant_wide())
-
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
-
-        assert notifications.open == {}
-        assert len(notifications.created) == 1
+        assert [event.data["excursion_id"] for event in events] == [
+            fixtures.EXCURSION_ID,
+            fixtures.OTHER_EXCURSION_ID,
+        ]
+        assert sorted(notifications.open) == sorted([NOTIFICATION_ID, OTHER_NOTIFICATION_ID])
+        for notification in notifications.open.values():
+            assert notification["title"].endswith("(Acknowledged)")
 
     async def test_acknowledging_a_resolved_excursion_creates_nothing(
         self, hass, handler, notifications
@@ -312,7 +313,7 @@ class TestAcknowledged:
         await _dispatch(hass, handler)
         await _resolve(hass, handler)
 
-        await _acknowledge(hass, handler, fixtures.alert_acknowledged_for_excursion())
+        await _acknowledge(hass, handler, fixtures.alert_acknowledged())
 
         assert notifications.open == {}
         assert len(notifications.created) == 1
