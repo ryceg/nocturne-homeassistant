@@ -42,6 +42,14 @@ def _notification_id(excursion_id: str) -> str:
     return f"nocturne_alert_{excursion_id}"
 
 
+def _acknowledged_excursions(payload: dict[str, Any]) -> list[str]:
+    """Servers before nocturne#2639 send a single excursionId, or none for acknowledge-all."""
+    if "excursionIds" in payload:
+        return payload["excursionIds"]
+    legacy = payload.get("excursionId")
+    return [legacy] if legacy else []
+
+
 class NocturneAlertHandler:
     def __init__(self, hass: HomeAssistant, notify_services: list[str], display_name: Callable[[], str]) -> None:
         self._hass = hass
@@ -99,9 +107,9 @@ class NocturneAlertHandler:
         self._open_rule_names.pop(excursion_id, None)
         self._hass.bus.async_fire(EVENT_NOCTURNE_ALERT_RESOLVED, {
             "excursion_id": excursion_id,
-            "alert_rule_id": payload["alertRuleId"],
-            "rule_name": payload["ruleName"],
-            "reason": payload["reason"],
+            "alert_rule_id": payload.get("alertRuleId"),
+            "rule_name": payload.get("ruleName"),
+            "reason": payload.get("reason"),
             "resolved_at": payload["resolvedAt"],
         })
         await self._hass.services.async_call(
@@ -111,7 +119,7 @@ class NocturneAlertHandler:
 
     async def handle_alert_acknowledged(self, payload: dict[str, Any]) -> None:
         acked_by = payload["acknowledgedBy"]
-        for excursion_id in payload["excursionIds"]:
+        for excursion_id in _acknowledged_excursions(payload):
             self._hass.bus.async_fire(EVENT_NOCTURNE_ALERT_ACKNOWLEDGED, {
                 "excursion_id": excursion_id,
                 "acknowledged_by": acked_by,

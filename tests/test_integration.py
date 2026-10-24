@@ -115,21 +115,46 @@ class TestAnEntryWiredToSignalR:
 
     async def test_a_glucose_push_keeps_the_polled_aps_state(self, reauth_hass, stubs, entry):
         before = reauth_hass.states.get("sensor.nocturne_insulin_on_board").state
+        stubs.clients[INSTANCE_URL].get_latest_aps_snapshot.return_value = ApsSnapshot(iob=9.9)
 
-        await callback(stubs, "on_glucose_reading")(fixtures.glucose_reading())
+        await callback(stubs, "on_glucose_reading")(
+            fixtures.glucose_reading(fixtures.sensor_glucose(mgdl=64.0))
+        )
         await reauth_hass.async_block_till_done()
 
+        assert float(reauth_hass.states.get("sensor.nocturne_current_glucose").state) == 64
         assert reauth_hass.states.get("sensor.nocturne_insulin_on_board").state == before
 
+    @pytest.mark.parametrize(
+        "payload",
+        [{"readings": []}, [{"sgv": 120, "mills": 1}]],
+        ids=["no readings", "legacy entries from an older server"],
+    )
     async def test_a_glucose_push_without_readings_changes_nothing(
-        self, reauth_hass, stubs, entry
+        self, reauth_hass, stubs, entry, payload
     ):
+        client = stubs.clients[INSTANCE_URL]
         before = reauth_hass.states.get("sensor.nocturne_current_glucose").state
+        polls = client.get_latest_glucose.await_count
 
-        await callback(stubs, "on_glucose_reading")({"readings": []})
+        await callback(stubs, "on_glucose_reading")(payload)
         await reauth_hass.async_block_till_done()
 
         assert reauth_hass.states.get("sensor.nocturne_current_glucose").state == before
+        assert client.get_latest_glucose.await_count == polls
+
+    async def test_pushes_more_often_than_the_poll_interval_do_not_stop_the_poll(
+        self, reauth_hass, stubs, entry, freezer
+    ):
+        stubs.clients[INSTANCE_URL].get_latest_aps_snapshot.return_value = ApsSnapshot(iob=3.5)
+
+        for _ in range(3):
+            freezer.tick(timedelta(seconds=GLUCOSE_UPDATE_INTERVAL_SECONDS / 2 + 1))
+            async_fire_time_changed(reauth_hass)
+            await callback(stubs, "on_glucose_reading")(fixtures.glucose_reading())
+            await reauth_hass.async_block_till_done()
+
+        assert reauth_hass.states.get("sensor.nocturne_insulin_on_board").state == "3.5"
 
     async def test_polling_carries_on_after_a_glucose_push(self, reauth_hass, stubs, entry):
         await callback(stubs, "on_glucose_reading")(fixtures.glucose_reading())

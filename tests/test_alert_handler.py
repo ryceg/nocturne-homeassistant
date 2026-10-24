@@ -317,3 +317,33 @@ class TestAcknowledged:
 
         assert notifications.open == {}
         assert len(notifications.created) == 1
+
+
+class TestAnOlderServer:
+    """Servers before nocturne#2639 send the untyped payloads."""
+
+    async def test_a_resolution_without_the_rule_still_dismisses(
+        self, hass, handler, notifications
+    ):
+        events = async_capture_events(hass, EVENT_NOCTURNE_ALERT_RESOLVED)
+        await _dispatch(hass, handler)
+
+        legacy = fixtures.alert_resolved()
+        for key in ("alertRuleId", "ruleName"):
+            del legacy[key]
+        await handler.handle_alert_resolved(legacy)
+        await hass.async_block_till_done()
+
+        assert events[0].data["rule_name"] is None
+        assert notifications.open == {}
+
+    async def test_a_single_excursion_acknowledgement_marks_its_notification(
+        self, hass, handler, notifications
+    ):
+        await _dispatch(hass, handler)
+        legacy = fixtures.alert_acknowledged(excursionId=fixtures.EXCURSION_ID)
+        del legacy["excursionIds"]
+
+        await _acknowledge(hass, handler, legacy)
+
+        assert notifications.open[NOTIFICATION_ID]["title"].endswith("(Acknowledged)")
