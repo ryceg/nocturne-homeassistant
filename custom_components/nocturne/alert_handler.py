@@ -42,6 +42,14 @@ def _notification_id(excursion_id: str) -> str:
     return f"nocturne_alert_{excursion_id}"
 
 
+def _acknowledged_excursions(payload: dict[str, Any]) -> list[str]:
+    """Servers before nocturne#2639 send a single excursionId, or none for acknowledge-all."""
+    if "excursionIds" in payload:
+        return payload["excursionIds"]
+    legacy = payload.get("excursionId")
+    return [legacy] if legacy else []
+
+
 class NocturneAlertHandler:
     def __init__(self, hass: HomeAssistant, notify_services: list[str], display_name: Callable[[], str]) -> None:
         self._hass = hass
@@ -99,6 +107,9 @@ class NocturneAlertHandler:
         self._open_rule_names.pop(excursion_id, None)
         self._hass.bus.async_fire(EVENT_NOCTURNE_ALERT_RESOLVED, {
             "excursion_id": excursion_id,
+            "alert_rule_id": payload.get("alertRuleId"),
+            "rule_name": payload.get("ruleName"),
+            "reason": payload.get("reason"),
             "resolved_at": payload["resolvedAt"],
         })
         await self._hass.services.async_call(
@@ -107,31 +118,21 @@ class NocturneAlertHandler:
         )
 
     async def handle_alert_acknowledged(self, payload: dict[str, Any]) -> None:
-        excursion_id = payload.get("excursionId")
         acked_by = payload["acknowledgedBy"]
-        self._hass.bus.async_fire(EVENT_NOCTURNE_ALERT_ACKNOWLEDGED, {
-            "excursion_id": excursion_id,
-            "acknowledged_by": acked_by,
-            "acknowledged_at": payload["acknowledgedAt"],
-        })
+        for excursion_id in _acknowledged_excursions(payload):
+            self._hass.bus.async_fire(EVENT_NOCTURNE_ALERT_ACKNOWLEDGED, {
+                "excursion_id": excursion_id,
+                "acknowledged_by": acked_by,
+                "acknowledged_at": payload["acknowledgedAt"],
+            })
 
-        if excursion_id is None:
-            open_ids = list(self._open_rule_names)
-            self._open_rule_names.clear()
-            for open_id in open_ids:
-                await self._hass.services.async_call(
-                    "persistent_notification", "dismiss",
-                    {"notification_id": _notification_id(open_id)},
-                )
-            return
-
-        rule_name = self._open_rule_names.get(excursion_id)
-        if rule_name is None:
-            return
-        await self._hass.services.async_call(
-            "persistent_notification", "create",
-            {"title": f"{self._title_prefix()}: {rule_name} (Acknowledged)", "message": f"Acknowledged by {acked_by}", "notification_id": _notification_id(excursion_id)},
-        )
+            rule_name = self._open_rule_names.get(excursion_id)
+            if rule_name is None:
+                continue
+            await self._hass.services.async_call(
+                "persistent_notification", "create",
+                {"title": f"{self._title_prefix()}: {rule_name} (Acknowledged)", "message": f"Acknowledged by {acked_by}", "notification_id": _notification_id(excursion_id)},
+            )
 
     def _is_repeat_dispatch(self, excursion_id: str, instance_id: str) -> bool:
         now = monotonic()
