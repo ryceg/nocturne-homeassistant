@@ -40,6 +40,12 @@ Sensors are registered dynamically based on available data. CGM-only users will 
 | Active Profile | -- | 5m |
 | Time in Range | % | 5m |
 
+## Dashboard card
+
+To show the reading on a dashboard, [SugarTV Card](https://github.com/wiltodelta/homeassistant-sugartv-card) (HACS) works with this integration out of the box. Pick the `Current Glucose` sensor in the card editor, and it finds the matching `Glucose Trend` entity by itself. Point `insulin_value` at the `Insulin on Board` sensor to show IOB above the reading.
+
+![SugarTV Card in a wide and a tall dashboard slot](https://raw.githubusercontent.com/wiltodelta/homeassistant-sugartv-card/v0.20.0/sugartv-card-layouts.png)
+
 ## Services
 
 | Service | Fields |
