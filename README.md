@@ -34,7 +34,12 @@ Sensors are registered dynamically based on available data. CGM-only users will 
 | Active Basal Rate | U/hr | 60s |
 | Pump Reservoir | U | 5m |
 | Pump Battery | % | 5m |
-| CGM Battery | % | 5m |
+| Uploader Battery | % | 5m |
+| Transmitter Voltage A | -- | 5m |
+| Transmitter Voltage B | -- | 5m |
+| Transmitter Resistance | -- | 5m |
+| Transmitter Age | days | 5m |
+| Transmitter Status | -- | 5m |
 | CGM Signal | dB | 5m |
 | Sensor Age | days | 5m |
 | Active Profile | -- | 5m |

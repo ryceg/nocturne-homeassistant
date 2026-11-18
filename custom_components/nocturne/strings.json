@@ -75,7 +75,22 @@
         "name": "Pump Battery"
       },
       "cgm_battery": {
-        "name": "CGM Battery"
+        "name": "Uploader Battery"
+      },
+      "transmitter_voltage_a": {
+        "name": "Transmitter Voltage A"
+      },
+      "transmitter_voltage_b": {
+        "name": "Transmitter Voltage B"
+      },
+      "transmitter_resistance": {
+        "name": "Transmitter Resistance"
+      },
+      "transmitter_age": {
+        "name": "Transmitter Age"
+      },
+      "transmitter_status": {
+        "name": "Transmitter Status"
       },
       "sensor_age": {
         "name": "Sensor Age"

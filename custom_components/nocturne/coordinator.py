@@ -115,6 +115,7 @@ class DeviceCoordinator(NocturneCoordinator):
         return {
             "pump": await self.client.get_latest_pump_snapshot(),
             "uploader": await self.client.get_latest_uploader_snapshot(),
+            "transmitter": await self.client.get_transmitter_status(),
             "profile": await self.client.get_profile_summary(),
             "daily_summary": await self.client.get_daily_summary(dt_util.now().date()),
             "sensor_age": await self.client.get_sensor_age(),

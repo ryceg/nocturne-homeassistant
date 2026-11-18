@@ -33,6 +33,24 @@ class NocturneSensorDescription(SensorEntityDescription):
     enum_options: list[str] | None = None
 
 
+TRANSMITTER_STATUSES = ["OK", "LOW", "BRICKED", "UNKNOWN"]
+
+
+def _transmitter_reading(key: str, field: str, icon: str) -> NocturneSensorDescription:
+    """A number the CGM transmitter reports, as its uploader shows it; no unit is stated for it."""
+    return NocturneSensorDescription(
+        key=key,
+        translation_key=key,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon=icon,
+        coordinator_key="device",
+        value_fn=lambda d: getattr(d["transmitter"], field) if d.get("transmitter") else None,
+        available_fn=lambda d: (
+            d.get("transmitter") is not None and getattr(d["transmitter"], field) is not None
+        ),
+    )
+
+
 GLUCOSE_SENSORS: list[NocturneSensorDescription] = [
     NocturneSensorDescription(
         key="current_glucose",
@@ -147,6 +165,32 @@ DEVICE_SENSORS: list[NocturneSensorDescription] = [
         coordinator_key="device",
         value_fn=lambda d: d["uploader"].battery if d.get("uploader") else None,
         available_fn=lambda d: d.get("uploader") is not None and d["uploader"].battery is not None,
+    ),
+    _transmitter_reading("transmitter_voltage_a", "voltage_a", "mdi:battery-heart-variant"),
+    _transmitter_reading("transmitter_voltage_b", "voltage_b", "mdi:battery-heart-variant"),
+    _transmitter_reading("transmitter_resistance", "resistance", "mdi:resistor"),
+    NocturneSensorDescription(
+        key="transmitter_age",
+        translation_key="transmitter_age",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="d",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:timer-sand",
+        coordinator_key="device",
+        value_fn=lambda d: d["transmitter"].days if d.get("transmitter") else None,
+        available_fn=lambda d: d.get("transmitter") is not None and d["transmitter"].days is not None,
+    ),
+    NocturneSensorDescription(
+        key="transmitter_status",
+        translation_key="transmitter_status",
+        device_class=SensorDeviceClass.ENUM,
+        icon="mdi:battery-alert-variant-outline",
+        coordinator_key="device",
+        enum_options=TRANSMITTER_STATUSES,
+        value_fn=lambda d: d["transmitter"].status if d.get("transmitter") else None,
+        available_fn=lambda d: (
+            d.get("transmitter") is not None and d["transmitter"].status in TRANSMITTER_STATUSES
+        ),
     ),
     NocturneSensorDescription(
         key="sensor_age",

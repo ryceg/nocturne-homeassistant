@@ -47,7 +47,7 @@ async def test_diagnostics_report_health_for_a_set_up_entry(
         "glucose": {"last_update_success": True, "data_keys": ["aps", "glucose"]},
         "device": {
             "last_update_success": True,
-            "data_keys": ["daily_summary", "profile", "pump", "sensor_age", "uploader"],
+            "data_keys": ["daily_summary", "profile", "pump", "sensor_age", "transmitter", "uploader"],
         },
     }
     assert result["entry"]["options"] == {CONF_NOTIFY_SERVICES: ["notify.mobile_app_phone"]}
