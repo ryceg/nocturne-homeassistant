@@ -11,6 +11,7 @@ from nocturne_py import (
     ApsSnapshot,
     PumpSnapshot,
     SensorGlucose,
+    TransmitterStatus,
     UploaderSnapshot,
 )
 from nocturne_py.models import DailySummaryDay, DailySummaryResponse, ProfileSummary
@@ -209,3 +210,35 @@ class TestGetDailySummaryToday:
             await client.get_daily_summary(TODAY)
             await client.get_daily_summary(TODAY)
         assert caplog.text.count("reports.read") == 1
+
+
+class TestGetLatestUploaderSnapshot:
+    async def test_skips_newer_snapshots_that_report_no_battery(self, client):
+        transmitter = UploaderSnapshot(type="DEXCOM_TRANSMITTER")
+        phone = UploaderSnapshot(type="PHONE", battery=64)
+        with patch("custom_components.nocturne.api.UploaderSnapshotApi") as api_cls:
+            api_cls.return_value.uploader_snapshot_get_all.return_value = MagicMock(
+                data=[transmitter, phone]
+            )
+            assert await client.get_latest_uploader_snapshot() is phone
+
+    async def test_returns_the_latest_when_none_reports_a_battery(self, client):
+        transmitter = UploaderSnapshot(type="DEXCOM_TRANSMITTER")
+        with patch("custom_components.nocturne.api.UploaderSnapshotApi") as api_cls:
+            api_cls.return_value.uploader_snapshot_get_all.return_value = MagicMock(
+                data=[transmitter]
+            )
+            assert await client.get_latest_uploader_snapshot() is transmitter
+
+    async def test_none_without_snapshots(self, client):
+        with patch("custom_components.nocturne.api.UploaderSnapshotApi") as api_cls:
+            api_cls.return_value.uploader_snapshot_get_all.return_value = MagicMock(data=None)
+            assert await client.get_latest_uploader_snapshot() is None
+
+
+class TestGetTransmitterStatus:
+    async def test_returns_what_the_endpoint_returns(self, client):
+        status = TransmitterStatus(voltage_a=296, voltage_b=281)
+        with patch("custom_components.nocturne.api.TransmitterStatusApi") as api_cls:
+            api_cls.return_value.transmitter_status_get_transmitter_status.return_value = status
+            assert await client.get_transmitter_status() is status

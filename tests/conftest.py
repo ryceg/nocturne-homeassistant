@@ -19,6 +19,7 @@ from nocturne_py import (
     GlucoseDirection,
     PumpSnapshot,
     SensorGlucose,
+    TransmitterStatus,
     UploaderSnapshot,
 )
 from nocturne_py.models import DailySummaryDay, ProfileSummary
@@ -132,6 +133,9 @@ def make_api_client() -> AsyncMock:
         reservoir=150.0, battery_percent=80
     )
     client.get_latest_uploader_snapshot.return_value = UploaderSnapshot(battery=90)
+    client.get_transmitter_status.return_value = TransmitterStatus(
+        voltage_a=296, voltage_b=281, resistance=710, days=52, status="OK"
+    )
     client.get_profile_summary.return_value = ProfileSummary()
     client.get_daily_summary.return_value = DailySummaryDay(time_in_range_percent=72.5)
     client.get_sensor_age.return_value = DeviceAgeInfo(days=5)

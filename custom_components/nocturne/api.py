@@ -33,6 +33,8 @@ from nocturne_py import (
     StateSpan,
     StateSpansApi,
     StatusApi,
+    TransmitterStatus,
+    TransmitterStatusApi,
     UploaderSnapshot,
     UploaderSnapshotApi,
     UpsertMeterGlucoseRequest,
@@ -47,6 +49,8 @@ from .auth import TokenProvider
 _LOGGER = logging.getLogger(__name__)
 
 DAILY_SUMMARY_CACHE_SECONDS = 30 * 60
+
+RECENT_UPLOADER_SNAPSHOTS = 10
 
 
 class NocturneApiClient:
@@ -128,16 +132,34 @@ class NocturneApiClient:
         return await asyncio.to_thread(_call)
 
     async def get_latest_uploader_snapshot(self) -> UploaderSnapshot | None:
-        """Fetch the most recent uploader (CGM phone) snapshot."""
+        """Fetch the most recent uploader (phone) snapshot that reports a battery level.
+
+        A bridge or a CGM transmitter is stored as an uploader too, with no
+        battery percentage, and can be newer than the status of the phone.
+        """
         await self._ensure_token()
 
         def _call() -> UploaderSnapshot | None:
             with self._client() as client:
                 api = UploaderSnapshotApi(client)
-                resp = api.uploader_snapshot_get_all(limit=1, sort="timestamp_desc")
-                if resp.data:
-                    return resp.data[0]
-                return None
+                resp = api.uploader_snapshot_get_all(
+                    limit=RECENT_UPLOADER_SNAPSHOTS, sort="timestamp_desc"
+                )
+                snapshots = resp.data or []
+                return next(
+                    (s for s in snapshots if s.battery is not None),
+                    snapshots[0] if snapshots else None,
+                )
+
+        return await asyncio.to_thread(_call)
+
+    async def get_transmitter_status(self) -> TransmitterStatus | None:
+        """Fetch the latest battery status of the CGM transmitter, or None when none was uploaded."""
+        await self._ensure_token()
+
+        def _call() -> TransmitterStatus | None:
+            with self._client() as client:
+                return TransmitterStatusApi(client).transmitter_status_get_transmitter_status()
 
         return await asyncio.to_thread(_call)
 

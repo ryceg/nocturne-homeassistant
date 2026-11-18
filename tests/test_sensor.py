@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from nocturne_py import ApsSnapshot, PumpSnapshot
+from nocturne_py import ApsSnapshot, PumpSnapshot, TransmitterStatus
 
 from custom_components.nocturne.const import DOMAIN
 
@@ -34,7 +34,12 @@ class TestSensorSetupEntry:
             "sensor.nocturne_active_basal_rate": STATE_UNAVAILABLE,
             "sensor.nocturne_pump_reservoir": STATE_UNAVAILABLE,
             "sensor.nocturne_pump_battery": STATE_UNAVAILABLE,
-            "sensor.nocturne_cgm_battery": "90",
+            "sensor.nocturne_uploader_battery": "90",
+            "sensor.nocturne_transmitter_voltage_a": "296",
+            "sensor.nocturne_transmitter_voltage_b": "281",
+            "sensor.nocturne_transmitter_resistance": "710",
+            "sensor.nocturne_transmitter_age": "52",
+            "sensor.nocturne_transmitter_status": "OK",
             "sensor.nocturne_sensor_age": "5",
             "sensor.nocturne_time_in_range": "72.5",
         }
@@ -48,6 +53,31 @@ class TestSensorSetupEntry:
         assert states()["sensor.nocturne_insulin_on_board"] == "2.5"
         assert states()["sensor.nocturne_pump_reservoir"] == "90.0"
 
+    async def test_transmitter_sensors_wait_for_an_uploaded_status(self, reauth_hass, stubs):
+        entry = make_entry(expires_in=3600)
+        client = make_api_client()
+        client.get_transmitter_status.return_value = None
+        stubs.clients[entry.data["instance_url"]] = client
+        await set_up(reauth_hass, entry)
+
+        def state(name: str) -> str:
+            return reauth_hass.states.get(f"sensor.nocturne_transmitter_{name}").state
+
+        assert {state(n) for n in ("voltage_a", "voltage_b", "resistance", "age", "status")} == {
+            STATE_UNAVAILABLE
+        }
+
+        client.get_transmitter_status.return_value = TransmitterStatus(
+            voltage_a=288, voltage_b=270, days=97, status="a status this version does not know"
+        )
+        await entry.runtime_data.device_coordinator.async_refresh()
+        await reauth_hass.async_block_till_done()
+
+        assert state("voltage_a") == "288"
+        assert state("age") == "97"
+        assert state("resistance") == STATE_UNAVAILABLE
+        assert state("status") == STATE_UNAVAILABLE
+
 
 class TestSensorRegistration:
     async def test_every_sensor_is_registered_under_its_entry_and_device(self, reauth_hass, stubs):
@@ -59,7 +89,7 @@ class TestSensorRegistration:
         devices = dr.async_get(reauth_hass)
         for entry in (first, second):
             registered = er.async_entries_for_config_entry(entities, entry.entry_id)
-            assert len(registered) == 12
+            assert len(registered) == 17
             assert all(e.unique_id.startswith(f"{entry.entry_id}_") for e in registered)
             assert {e.device_id for e in registered} == {
                 devices.async_get_device({(DOMAIN, entry.entry_id)}).id
